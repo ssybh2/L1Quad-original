@@ -778,13 +778,31 @@ VectorN<float, 4> ModeAdaptive::motorMixing(VectorN<float, 4> thrustMomentCmd)
     const float b_F = 0.043693;
     const float a_M = 0.000011667;
     const float b_M = 0.0059137;
-#elif (REAL_OR_SITL) // parameters for real drone
-    const float L = 0.175; // longer distance between adjacent motors
-    const float D = 0.131; // shorter distance between adjacent motors
-    const float a_F = 0.0009251;
-    const float b_F = 0.021145;
-    const float a_M = 0.00001211;
-    const float b_M = 0.0009864;
+#elif (REAL_OR_SITL) // softdrone real-airframe parameters
+    // Body frame: +X forward, +Y right, +Z down (FRD).
+    // Square X layout, measured motor-center spans:
+    //   L = left-right motor-row spacing (roll lever-arm span)
+    //   D = front-rear motor-row spacing (pitch lever-arm span)
+    const float L = 0.28f;
+    const float D = 0.28f;
+
+    // Static motor/propeller fits from the softdrone thrust-stand dataset.
+    // w is the same command variable used by this mixer:
+    //     w = (PWM_us - 1000) / 10
+    // Validated fit range: approximately 1050..1800 us.
+    // Thrust is in N and reaction torque is in N*m.
+    //     F(w) = a_F*w^2 + b_F*w
+    //     M(w) = a_M*w^2 + b_M*w
+    const float a_F = 0.000968094f;
+    const float b_F = 0.004763730f;
+    const float a_M = 0.0000107130307f;
+    const float b_M = 0.000243044484f;
+
+    // Softdrone motor/output order expected by the mixer:
+    //   w[0] / output 1: front-right, CCW
+    //   w[1] / output 2: rear-left,   CCW
+    //   w[2] / output 3: front-left,  CW
+    //   w[3] / output 4: rear-right,  CW
 #endif
 
     // solve for linearizing point
