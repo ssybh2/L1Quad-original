@@ -1946,10 +1946,20 @@ public:
         const float kg_vehicleMass = 3; // SITL drone mass.    
         const Matrix3f J = {0.023, 0, 0, 0, 0.023, 0, 0, 0, 0.0459}; // This is pulled from SIM_Motor.cpp
         const Matrix3f Jinv = {43.478, 0, 0, 0, 43.478, 0, 0, 0, 21.786}; // hand-computed
-    #elif (REAL_OR_SITL) // Real 
-        const float kg_vehicleMass = 0.62;   // weight for the real drone
-        const Matrix3f J = {0.002016, 0, 0, 0, 0.001827, 0, 0, 0, 0.00322}; // This is from CAD model of the real drone
-        const Matrix3f Jinv = {496.03, 0, 0, 0, 547.345, 0, 0, 0, 310.559}; // hand-computed
+    #elif (REAL_OR_SITL) // Real - softdrone configuration
+        // Body frame follows ArduPilot FRD: +X forward, +Y right, +Z down.
+        // Measured all-up mass and principal moments of inertia for softdrone.
+        const float kg_vehicleMass = 1.3854f;
+        const Matrix3f J = {
+            0.02218f, 0, 0,
+            0, 0.02256f, 0,
+            0, 0, 0.03372f
+        };
+        const Matrix3f Jinv = {
+            45.085663f, 0, 0,
+            0, 44.326241f, 0,
+            0, 0, 29.655991f
+        };
     #endif
 
     Vector3f v_prev; // storage of previous step linear velocity
