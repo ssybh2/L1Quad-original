@@ -155,7 +155,7 @@ def main():
     print(f"connected: sysid={target_system} compid={target_component}")
 
     if args.command == "status":
-        for name in ("RC_OVERRIDE_TIME", "TRAJINDEX", "LANDFLAG", "L1ENABLE"):
+        for name in ("SYSID_MYGCS", "RC_OVERRIDE_TIME", "TRAJINDEX", "LANDFLAG", "L1ENABLE"):
             value = request_param(m, target_system, target_component, name)
             print(f"{name}={value}")
         return 0
@@ -167,6 +167,13 @@ def main():
 
     if not (0.0 < args.loss <= 30.0):
         raise SystemExit("--loss must be >0 and <=30")
+
+    sysid_mygcs = request_param(m, target_system, target_component, "SYSID_MYGCS")
+    if sysid_mygcs is not None and int(round(sysid_mygcs)) != args.source_system:
+        raise SystemExit(
+            f"SYSID_MYGCS={sysid_mygcs:.0f} but --source-system={args.source_system}; "
+            "ArduPilot will ignore RC overrides from the wrong MAVLink system id"
+        )
 
     override_timeout = request_param(m, target_system, target_component, "RC_OVERRIDE_TIME")
     if override_timeout is None:
