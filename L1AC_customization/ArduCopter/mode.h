@@ -1931,6 +1931,16 @@ public:
 
     bool init(bool ignore_checks) override;
     virtual void run() override;
+    void exit() override;
+
+    // Runtime motor-degradation command, supplied over MAVLink from the Orange Pi.
+    // This state is intentionally RAM-only and is cleared whenever Mode 29 exits.
+    void set_motor_degradation_command(bool enable, uint8_t motor_id, float loss_pct, bool yaw_free);
+    void clear_motor_degradation_command();
+    bool motor_degradation_command_fresh(uint32_t now_ms) const;
+
+    static constexpr uint32_t MOTOR_DEG_WATCHDOG_MS = 500U;
+    static constexpr float MOTOR_DEG_MAX_LOSS_PCT = 30.0f;
 
     bool requires_GPS() const override { return false; }
     bool has_manual_throttle() const override { return true; }
@@ -1996,6 +2006,13 @@ protected:
     // The name() and name4() methods are for logging and display purposes.
 
 private:
+    // Runtime fault-injection state. Motor IDs are 1..4 in the Mode 29 mixer order.
+    bool motor_degradation_enabled = false;
+    bool motor_degradation_yaw_free = true;
+    uint8_t motor_degradation_motor_id = 0;
+    float motor_degradation_loss_pct = 0.0f;
+    uint32_t motor_degradation_last_rx_ms = 0U;
+
     VectorN<float, 4> geometricController(Vector3f targetPos,
                                                     Vector3f targetVel,
                                                     Vector3f targetAcc,
@@ -2004,7 +2021,7 @@ private:
                                                     Vector2f targetYaw,
                                                     Vector2f targetYaw_dot,
                                                     Vector2f targetYaw_ddot);
-    VectorN<float, 4> L1AdaptiveAugmentation(VectorN<float, 4> thrustMomentCmd);
+    VectorN<float, 4> L1AdaptiveAugmentation(VectorN<float, 4> thrustMomentCmd, bool suppress_yaw_control);
     VectorN<float,9> unit_vec(Vector3f q, Vector3f q_dot, Vector3f q_ddot);
     Matrix3f hatOperator(Vector3f input);
     Vector3f veeOperator(Matrix3f input);
