@@ -11,9 +11,13 @@ Physical pilot channels 1..8 are never overridden.
 """
 
 import argparse
+import os
 import signal
 import sys
 import time
+
+# RC_CHANNELS_OVERRIDE channels 9..18 are MAVLink2 extension fields.
+os.environ.setdefault("MAVLINK20", "1")
 
 from pymavlink import mavutil
 
