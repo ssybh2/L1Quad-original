@@ -36,7 +36,14 @@ Before enabling derating, set:
 TRAJINDEX = 0
 LANDFLAG = 0
 RC_OVERRIDE_TIME = 0.5
+
+RC9_OPTION  = 0
+RC10_OPTION = 0
+RC11_OPTION = 0
+RC12_OPTION = 0
 ```
+
+Also keep `FLTMODE_CH` away from RC9..RC12; RC5 is the intended flight-mode channel in the example below.
 
 `RC_OVERRIDE_TIME=0.5` makes the override disappear about 500 ms after the Orange Pi stops sending.
 
