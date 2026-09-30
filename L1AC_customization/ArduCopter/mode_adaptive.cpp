@@ -62,10 +62,53 @@ bool ModeAdaptive::init(bool ignore_checks)
 
     targetSpeed = g.circSpeed; // final tangent speed is read from the parameter circSpeed
 
-    landingTriggered = 0; // set the indicator to 0  
+    landingTriggered = 0; // set the indicator to 0
+
+    // A runtime fault command must never survive a Mode 29 re-entry.
+    clear_motor_degradation_command();
 
     gcs().send_text(MAV_SEVERITY_INFO, "Adpative mode initialization is done.");
     return true;
+}
+
+void ModeAdaptive::exit()
+{
+    // Leaving Mode 29 immediately clears the injected actuator fault.
+    clear_motor_degradation_command();
+}
+
+void ModeAdaptive::set_motor_degradation_command(bool enable, uint8_t motor_id, float loss_pct, bool yaw_free)
+{
+    if (!enable) {
+        clear_motor_degradation_command();
+        return;
+    }
+
+    if (motor_id < 1 || motor_id > 4) {
+        return;
+    }
+
+    motor_degradation_enabled = true;
+    motor_degradation_motor_id = motor_id;
+    motor_degradation_loss_pct = constrain_float(loss_pct, 0.0f, MOTOR_DEG_MAX_LOSS_PCT);
+    motor_degradation_yaw_free = yaw_free;
+    motor_degradation_last_rx_ms = AP_HAL::millis();
+}
+
+void ModeAdaptive::clear_motor_degradation_command()
+{
+    motor_degradation_enabled = false;
+    motor_degradation_yaw_free = true;
+    motor_degradation_motor_id = 0;
+    motor_degradation_loss_pct = 0.0f;
+    motor_degradation_last_rx_ms = 0U;
+}
+
+bool ModeAdaptive::motor_degradation_command_fresh(uint32_t now_ms) const
+{
+    return motor_degradation_enabled &&
+           motor_degradation_last_rx_ms != 0U &&
+           (now_ms - motor_degradation_last_rx_ms) <= MOTOR_DEG_WATCHDOG_MS;
 }
 
 void ModeAdaptive::run()
@@ -163,6 +206,18 @@ void ModeAdaptive::run()
     {
         switch (trajIndex)
         {
+        case 0: // hover at 1 m above the NED origin
+        {
+            targetPos = (Vector3f){0, 0, -1};
+            targetVel = (Vector3f){0, 0, 0};
+            targetAcc = (Vector3f){0, 0, 0};
+            targetJerk = (Vector3f){0, 0, 0};
+            targetSnap = (Vector3f){0, 0, 0};
+            targetYaw = (Vector2f){1, 0};
+            targetYaw_dot = (Vector2f){0, 0};
+            targetYaw_ddot = (Vector2f){0, 0};
+            break;
+        }
         case 1: // circular trajectory with variable yaw 
         {   
             #if (!REAL_OR_SITL) // SITL
@@ -217,10 +272,15 @@ void ModeAdaptive::run()
         }
         default:
         {
-            // if the case is not covered in the previous cases, then hover.
             GCS_SEND_TEXT(MAV_SEVERITY_ERROR, "Wrong trajectory index. Drone will hover.");
-            // set targetSpeed = 0 below to enfornce hover
-            ACRL_trajectory_figure8_fixed_yaw(timeInThisRun, radiusX, radiusY, 0, &targetPos, &targetVel, &targetAcc, &targetJerk, &targetSnap, &targetYaw, &targetYaw_dot, &targetYaw_ddot);
+            targetPos = (Vector3f){0, 0, -1};
+            targetVel = (Vector3f){0, 0, 0};
+            targetAcc = (Vector3f){0, 0, 0};
+            targetJerk = (Vector3f){0, 0, 0};
+            targetSnap = (Vector3f){0, 0, 0};
+            targetYaw = (Vector2f){1, 0};
+            targetYaw_dot = (Vector2f){0, 0};
+            targetYaw_ddot = (Vector2f){0, 0};
             break;
         }
         }
@@ -254,8 +314,38 @@ void ModeAdaptive::run()
         }   
     }
 
+    const uint32_t motor_deg_now_ms = AP_HAL::millis();
+    const uint32_t motor_deg_age_ms =
+        motor_degradation_last_rx_ms == 0U ? 999999U : motor_deg_now_ms - motor_degradation_last_rx_ms;
+
+    // Fault injection is only permitted for the 1 m hover experiment, after
+    // takeoff has finished and the vehicle has had one second to settle.
+    const bool motor_degradation_active =
+        motors->armed() &&
+        trajIndex == 0 &&
+        !g.LandFlag &&
+        timeInThisRun >= 3.0f &&
+        motor_degradation_loss_pct > 0.0f &&
+        motor_degradation_command_fresh(motor_deg_now_ms);
+
+    const bool yaw_free_active =
+        motor_degradation_active && motor_degradation_yaw_free;
+
+    if (yaw_free_active) {
+        // Keep estimating yaw, but stop asking the aircraft to return to a
+        // fixed heading. The explicit yaw torque is removed below.
+        const float yaw_now = ahrs.get_yaw();
+        targetYaw = (Vector2f){cosf(yaw_now), sinf(yaw_now)};
+        targetYaw_dot = (Vector2f){0, 0};
+        targetYaw_ddot = (Vector2f){0, 0};
+    }
+
     VectorN<float, 4> thrustMomentCmd;
-    thrustMomentCmd = geometricController(targetPos, targetVel, targetAcc, targetJerk, targetSnap, targetYaw, targetYaw_dot, targetYaw_ddot); // only support constant yaw
+    thrustMomentCmd = geometricController(targetPos, targetVel, targetAcc, targetJerk, targetSnap, targetYaw, targetYaw_dot, targetYaw_ddot);
+
+    if (yaw_free_active) {
+        thrustMomentCmd[3] = 0.0f;
+    }
 
     uint8_t LandFlag = 0;
     LandFlag = g.LandFlag;
@@ -270,26 +360,51 @@ void ModeAdaptive::run()
 
     // L1 adaptive augmentation
     VectorN<float, 4> L1thrustMomentCmd;
-    L1thrustMomentCmd = L1AdaptiveAugmentation(thrustMomentCmd);
+    L1thrustMomentCmd = L1AdaptiveAugmentation(thrustMomentCmd, yaw_free_active);
 
     // uncomment the lines below if you want to inject uncertainty to the control channels
     // thrustMomentCmd[0] = thrustMomentCmd[0] + 5 * sinf(0.5 * currentTime);
     // thrustMomentCmd[1] = thrustMomentCmd[1] + 0.1 * sinf( currentTime);
     // thrustMomentCmd[2] = thrustMomentCmd[2] + 0.05 * sinf( 2 * currentTime);
 
-    // motor mixing
-    VectorN<float, 4> motorPWM;
-    motorPWM = motorMixing(thrustMomentCmd + L1thrustMomentCmd);
+    // Motor allocation. Normal Mode 29 keeps the original full F/Mx/My/Mz
+    // mixer. Fault mode intentionally drops the yaw-moment objective so the
+    // remaining actuator authority is spent on thrust, roll and pitch.
+    VectorN<float, 4> motorPWMCommanded;
+    if (yaw_free_active) {
+        motorPWMCommanded = motorMixingYawFree(thrustMomentCmd + L1thrustMomentCmd);
+    } else {
+        motorPWMCommanded = motorMixing(thrustMomentCmd + L1thrustMomentCmd);
+    }
 
-    // motorPWM saturation
-    if (motorPWM[0] < 0) {motorPWM[0] = 0;}
-    else if (motorPWM[0] > 100) {motorPWM[0] = 100;}
-    if (motorPWM[1] < 0) {motorPWM[1] = 0;}
-    else if (motorPWM[1] > 100) {motorPWM[1] = 100;}
-    if (motorPWM[2] < 0) {motorPWM[2] = 0;}
-    else if (motorPWM[2] > 100) {motorPWM[2] = 100;}
-    if (motorPWM[3] < 0) {motorPWM[3] = 0;}
-    else if (motorPWM[3] > 100) {motorPWM[3] = 100;}
+    // Saturate the nominal actuator request before the injected effectiveness
+    // loss. Therefore an 80%-effective motor can never recover 100% nominal
+    // thrust by asking for more than the normal actuator limit.
+    for (uint8_t i = 0; i < 4; i++) {
+        motorPWMCommanded[i] = constrain_float(motorPWMCommanded[i], 0.0f, 100.0f);
+    }
+
+    VectorN<float, 4> motorPWM = motorPWMCommanded;
+
+    if (motor_degradation_active) {
+        const uint8_t motor_index = motor_degradation_motor_id - 1;
+        const float effectiveness = 1.0f - motor_degradation_loss_pct * 0.01f;
+
+#if (!REAL_OR_SITL)
+        const float deg_a_F = 0.0014597f;
+        const float deg_b_F = 0.043693f;
+#elif (REAL_OR_SITL)
+        const float deg_a_F = 0.000968094f;
+        const float deg_b_F = 0.004763730f;
+#endif
+        const float w_nom = motorPWMCommanded[motor_index];
+        const float thrust_nom = deg_a_F * w_nom * w_nom + deg_b_F * w_nom;
+        const float thrust_applied = MAX(0.0f, effectiveness * thrust_nom);
+        const float disc = deg_b_F * deg_b_F + 4.0f * deg_a_F * thrust_applied;
+        motorPWM[motor_index] =
+            (-deg_b_F + sqrtF(MAX(0.0f, disc))) / (2.0f * deg_a_F);
+        motorPWM[motor_index] = constrain_float(motorPWM[motor_index], 0.0f, 100.0f);
+    }
 
     // disarm the vehicle by setting PWM to 1 when landing is completed
     if (landingComplete)
@@ -299,6 +414,23 @@ void ModeAdaptive::run()
         motorPWM[2] = 1;
         motorPWM[3] = 1;
     }
+
+    AP::logger().Write("L1DG",
+                       "active,yawfree,motor,loss,age,c1,c2,c3,c4,a1,a2,a3,a4",
+                       "BBBfIffffffff",
+                       (uint8_t)motor_degradation_active,
+                       (uint8_t)yaw_free_active,
+                       motor_degradation_motor_id,
+                       (double)motor_degradation_loss_pct,
+                       motor_deg_age_ms,
+                       (double)motorPWMCommanded[0],
+                       (double)motorPWMCommanded[1],
+                       (double)motorPWMCommanded[2],
+                       (double)motorPWMCommanded[3],
+                       (double)motorPWM[0],
+                       (double)motorPWM[1],
+                       (double)motorPWM[2],
+                       (double)motorPWM[3]);
 
     if (motors->armed()) // only command the motor PWM when the vehicle is armed.
     {
@@ -558,7 +690,7 @@ VectorN<float, 4> ModeAdaptive::geometricController(Vector3f targetPos,
     return thrustMomentCmd;
 }
 
-VectorN<float, 4> ModeAdaptive::L1AdaptiveAugmentation(VectorN<float, 4> thrustMomentCmd)
+VectorN<float, 4> ModeAdaptive::L1AdaptiveAugmentation(VectorN<float, 4> thrustMomentCmd, bool suppress_yaw_control)
 {
     // state predictor
     Vector3f v_hat;          // state predictor value of translational speed
@@ -672,6 +804,13 @@ VectorN<float, 4> ModeAdaptive::L1AdaptiveAugmentation(VectorN<float, 4> thrustM
     // negate
     u_ad = -u_ad;
 
+    // In degraded yaw-free mode we still estimate the yaw disturbance for
+    // diagnostics/prediction, but intentionally do not command adaptive yaw
+    // torque.
+    if (suppress_yaw_control) {
+        u_ad[3] = 0.0f;
+    }
+
     AP::logger().Write("L1AD", "v1,v2,v3,v1hat,v2hat,v3hat,o1,o2,o3,o1hat,o2hat,o3hat", "ffffffffffff",
                        (double)v_now.x,
                        (double)v_now.y,
@@ -766,6 +905,47 @@ Vector3f ModeAdaptive::veeOperator(Matrix3f input)
     output.z = input.b.x;
 
     return output;
+}
+
+VectorN<float, 4> ModeAdaptive::motorMixingYawFree(VectorN<float, 4> thrustMomentCmd)
+{
+    // Reduced-attitude allocator: satisfy total thrust, roll moment and pitch
+    // moment without constraining reaction-torque/yaw moment.
+#if (!REAL_OR_SITL)
+    const float L = 0.25f;
+    const float D = 0.25f;
+    const float a_F = 0.0014597f;
+    const float b_F = 0.043693f;
+#elif (REAL_OR_SITL)
+    const float L = 0.28f;
+    const float D = 0.28f;
+    const float a_F = 0.000968094f;
+    const float b_F = 0.004763730f;
+#endif
+
+    const float F = thrustMomentCmd[0];
+    const float Mx = thrustMomentCmd[1];
+    const float My = thrustMomentCmd[2];
+
+    // Minimum-norm solution of:
+    // F  = f1 + f2 + f3 + f4
+    // Mx = L/2 * (-f1 + f2 + f3 - f4)
+    // My = D/2 * ( f1 - f2 + f3 - f4)
+    // No Mz equation is imposed.
+    VectorN<float, 4> motorThrust;
+    motorThrust[0] = F * 0.25f - Mx / (2.0f * L) + My / (2.0f * D);
+    motorThrust[1] = F * 0.25f + Mx / (2.0f * L) - My / (2.0f * D);
+    motorThrust[2] = F * 0.25f + Mx / (2.0f * L) + My / (2.0f * D);
+    motorThrust[3] = F * 0.25f - Mx / (2.0f * L) - My / (2.0f * D);
+
+    VectorN<float, 4> w;
+    for (uint8_t i = 0; i < 4; i++) {
+        const float fi = MAX(0.0f, motorThrust[i]);
+        const float disc = b_F * b_F + 4.0f * a_F * fi;
+        w[i] = (-b_F + sqrtF(MAX(0.0f, disc))) / (2.0f * a_F);
+    }
+
+    return w;
 }
 
 VectorN<float, 4> ModeAdaptive::motorMixing(VectorN<float, 4> thrustMomentCmd)
