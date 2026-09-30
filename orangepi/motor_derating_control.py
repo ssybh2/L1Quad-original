@@ -155,7 +155,7 @@ def main():
     print(f"connected: sysid={target_system} compid={target_component}")
 
     if args.command == "status":
-        for name in ("SYSID_MYGCS", "RC_OVERRIDE_TIME", "TRAJINDEX", "LANDFLAG", "L1ENABLE"):
+        for name in ("SYSID_MYGCS", "RC_OVERRIDE_TIME", "FLTMODE_CH", "RC9_OPTION", "RC10_OPTION", "RC11_OPTION", "RC12_OPTION", "TRAJINDEX", "LANDFLAG", "L1ENABLE"):
             value = request_param(m, target_system, target_component, name)
             print(f"{name}={value}")
         return 0
