@@ -314,11 +314,54 @@ void ModeAdaptive::run()
         }   
     }
 
+    // Orange Pi runtime control uses standard MAVLink RC_CHANNELS_OVERRIDE
+    // on channels 9..12, leaving the pilot's normal flight-mode/arm channels
+    // untouched:
+    //   RC9  : <=1200 disable, >=1800 enable
+    //   RC10 : motor selector (1..4)
+    //   RC11 : 1000..2000 => 0..30% thrust-effectiveness loss
+    //   RC12 : <=1200 keep yaw control, >=1800 yaw-free mode
+    RC_Channel *deg_enable_ch = rc().channel(8);
+    RC_Channel *deg_motor_ch = rc().channel(9);
+    RC_Channel *deg_loss_ch = rc().channel(10);
+    RC_Channel *deg_yaw_ch = rc().channel(11);
+
+    const bool deg_override_valid =
+        deg_enable_ch != nullptr && deg_enable_ch->has_override() &&
+        deg_motor_ch != nullptr && deg_motor_ch->has_override() &&
+        deg_loss_ch != nullptr && deg_loss_ch->has_override() &&
+        deg_yaw_ch != nullptr && deg_yaw_ch->has_override();
+
+    if (deg_override_valid) {
+        const bool enable = deg_enable_ch->get_radio_in() >= 1800;
+
+        uint8_t motor_id = 1;
+        const uint16_t motor_pwm = deg_motor_ch->get_radio_in();
+        if (motor_pwm >= 1750) {
+            motor_id = 4;
+        } else if (motor_pwm >= 1500) {
+            motor_id = 3;
+        } else if (motor_pwm >= 1250) {
+            motor_id = 2;
+        }
+
+        const float loss_pct = constrain_float(
+            (deg_loss_ch->get_radio_in() - 1000) * (MOTOR_DEG_MAX_LOSS_PCT / 1000.0f),
+            0.0f,
+            MOTOR_DEG_MAX_LOSS_PCT
+        );
+        const bool yaw_free = deg_yaw_ch->get_radio_in() >= 1800;
+
+        set_motor_degradation_command(enable, motor_id, loss_pct, yaw_free);
+    } else {
+        clear_motor_degradation_command();
+    }
+
     const uint32_t motor_deg_now_ms = AP_HAL::millis();
     const uint32_t motor_deg_age_ms =
         motor_degradation_last_rx_ms == 0U ? 999999U : motor_deg_now_ms - motor_degradation_last_rx_ms;
 
-    // Fault injection is only permitted for the 1 m hover experiment, after
+    // Motor derating is only permitted for the 1 m hover experiment, after
     // takeoff has finished and the vehicle has had one second to settle.
     const bool motor_degradation_active =
         motors->armed() &&
