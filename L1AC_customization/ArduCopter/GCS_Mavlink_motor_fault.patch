@@ -1,0 +1,56 @@
+diff --git a/ArduCopter/GCS_Mavlink.cpp b/ArduCopter/GCS_Mavlink.cpp
+--- a/ArduCopter/GCS_Mavlink.cpp
++++ b/ArduCopter/GCS_Mavlink.cpp
+@@
+     case MAV_CMD_DO_PAUSE_CONTINUE: {
+         mavlink_command_int_t packet_int;
+         GCS_MAVLINK_Copter::convert_COMMAND_LONG_to_COMMAND_INT(packet, packet_int);
+         return handle_command_pause_continue(packet_int);
+     }
++
++#if MODE_ADAPTIVE_ENABLED == ENABLED
++    // Softdrone runtime motor-degradation experiment command.
++    // MAV_CMD_USER_1 (31010):
++    //   param1: enable (0/1)
++    //   param2: Mode29 motor id (1..4)
++    //   param3: thrust effectiveness loss in percent (0..30)
++    //   param4: yaw-free reduced-attitude mode (0/1)
++    case MAV_CMD_USER_1: {
++        const bool enable = packet.param1 > 0.5f;
++
++        if (!enable) {
++            copter.mode_adaptive.clear_motor_degradation_command();
++            send_text(MAV_SEVERITY_INFO, "Motor degradation command cleared");
++            return MAV_RESULT_ACCEPTED;
++        }
++
++        if (copter.flightmode->mode_number() != Mode::Number::ADAPTIVE) {
++            send_text(MAV_SEVERITY_WARNING, "Motor degradation rejected: Mode29 inactive");
++            return MAV_RESULT_DENIED;
++        }
++
++        const uint8_t motor_id = (uint8_t)packet.param2;
++        const float loss_pct = packet.param3;
++        const bool yaw_free = packet.param4 > 0.5f;
++
++        if (motor_id < 1 || motor_id > 4 ||
++            loss_pct <= 0.0f ||
++            loss_pct > ModeAdaptive::MOTOR_DEG_MAX_LOSS_PCT) {
++            send_text(MAV_SEVERITY_WARNING, "Motor degradation rejected: invalid args");
++            return MAV_RESULT_DENIED;
++        }
++
++        copter.mode_adaptive.set_motor_degradation_command(
++            true,
++            motor_id,
++            loss_pct,
++            yaw_free
++        );
++        return MAV_RESULT_ACCEPTED;
++    }
++#endif
++
+     default:
+         return GCS_MAVLINK::handle_command_long_packet(packet);
+     }
+ }
