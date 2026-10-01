@@ -1,0 +1,46 @@
+# Softdrone Mode 29 controller baseline
+# Captured/confirmed on 2026-10-01.
+#
+# This file is the version-controlled tuning source of truth.
+# Apply it to the Pixhawk only while DISARMED:
+#   python3 orangepi/apply_mode29_config.py orangepi/configs/mode29_baseline.yaml
+#
+# These are runtime AP_Param values. Editing this YAML and applying it does
+# NOT require rebuilding or reflashing the ArduPilot firmware.
+
+version: 1
+
+profile:
+  name: mode29_baseline
+  airframe: softdrone
+  description: Real-airframe geometric-controller baseline with L1 disabled.
+  firmware_branch: feature/softdrone-motor-degradation-yaw-free
+
+parameters:
+  geometric_position:
+    GEOCTRL_KPX: 14.0
+    GEOCTRL_KPY: 15.0
+    GEOCTRL_KPZ: 15.0
+
+  geometric_velocity:
+    GEOCTRL_KVX: 1.5
+    GEOCTRL_KVY: 0.9
+    GEOCTRL_KVZ: 1.1
+
+  geometric_attitude:
+    GEOCTRL_KRX: 0.55
+    GEOCTRL_KRY: 0.35
+    GEOCTRL_KRZ: 0.15
+
+  geometric_rate:
+    GEOCTRL_KOX: 0.035
+    GEOCTRL_KOY: 0.030
+    GEOCTRL_KOZ: 0.004
+
+  l1:
+    L1ENABLE: 0
+    ASV: -5.0
+    ASOMEGA: -10.0
+    CTOFFQ1THRUST: 30.0
+    CTOFFQ1MOMENT: 5.0
+    CTOFFQ2MOMENT: 15.0
