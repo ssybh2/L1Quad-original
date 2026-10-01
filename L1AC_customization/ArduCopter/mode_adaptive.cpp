@@ -16,6 +16,40 @@
 
 #if MODE_ADAPTIVE_ENABLED == ENABLED
 
+namespace {
+
+constexpr float MODE29_ENTRY_MAX_XY_M = 0.50f;
+constexpr float MODE29_ENTRY_MAX_Z_M = 0.50f;
+
+bool mode29_finite(const Vector2f &v)
+{
+    return isfinite(v.x) && isfinite(v.y);
+}
+
+bool mode29_finite(const Vector3f &v)
+{
+    return isfinite(v.x) && isfinite(v.y) && isfinite(v.z);
+}
+
+bool mode29_finite(const VectorN<float, 4> &v)
+{
+    for (uint8_t i = 0; i < 4; i++) {
+        if (!isfinite(v[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void mode29_zero(VectorN<float, 4> &v)
+{
+    for (uint8_t i = 0; i < 4; i++) {
+        v[i] = 0.0f;
+    }
+}
+
+} // namespace
+
 /*
  * Init and run calls for adaptive flight mode (copied from stabilize)
  */
@@ -23,51 +57,90 @@
 // Init function: this function will be called everytime the FC enters the adaptive mode.
 bool ModeAdaptive::init(bool ignore_checks)
 {
-    motorEnable = 1; // whether to raise motor PWM
-    landingComplete = 0; 
+    (void)ignore_checks;
 
-    if (ahrs.have_inertial_nav())
-    {
-        if(ahrs.get_velocity_NED(v_hat_prev)){;} // state predictor value of translational speed
-        v_prev = v_hat_prev;               // initialize the previous velocity in the same way
-    }
-    else
-    {
-        gcs().send_text(MAV_SEVERITY_CRITICAL, "Inertial navigation is inactive upon entering adaptive mode.");
-        motorEnable = 0; // if the velocity is unavailable, disable the flight.
-    }
-    omega_hat_prev = AP::ahrs().get_gyro(); // state predictor value of rotational speed
-    omega_prev = omega_hat_prev;
-
-    Vector3f dummyPosition;
-    int locAvailable = ahrs.get_relative_position_NED_origin(dummyPosition);
-    if (!locAvailable)
-    {
-        gcs().send_text(MAV_SEVERITY_CRITICAL, "Location unavailable. Please reboot.");
-        motorEnable = 0; // if the location is unavailable, disable the flight.
-    }
-
-    // initialize rotation matrix
-    Quaternion q;
-    q.rotation_matrix(R_prev); // transforming the quaternion q to rotation matrix R
-
-    u_b_prev = u_b_prev * 0;   // initialize u_baseline
-    u_ad_prev = u_ad_prev * 0; // initialize u_ad
-    lpf1_prev = lpf1_prev * 0; // initialize lpf1_prev
-    lpf2_prev = lpf2_prev * 0; // initialize lpf2_prev
-
-    trajIndex = g.trajIndex; // fix the trajectory
-    radiusX = g.circRadiusX; // circle radius or figure8's x radius
-    radiusY = g.circRadiusY; // figure8's y radius (not used for circle radius)
-
-    targetSpeed = g.circSpeed; // final tangent speed is read from the parameter circSpeed
-
-    landingTriggered = 0; // set the indicator to 0
-
-    // A runtime fault command must never survive a Mode 29 re-entry.
+    // Never permit direct motor output until all Mode 29 entry checks pass.
+    motorEnable = 0;
+    landingComplete = 0;
+    landingTriggered = 0;
     clear_motor_degradation_command();
 
-    gcs().send_text(MAV_SEVERITY_INFO, "Adpative mode initialization is done.");
+    if (!ahrs.have_inertial_nav()) {
+        GCS_SEND_TEXT(MAV_SEVERITY_CRITICAL,
+                      "Mode29 rejected: inertial navigation inactive");
+        return false;
+    }
+
+    if (!ahrs.get_velocity_NED(v_hat_prev) || !mode29_finite(v_hat_prev)) {
+        GCS_SEND_TEXT(MAV_SEVERITY_CRITICAL,
+                      "Mode29 rejected: invalid NED velocity");
+        return false;
+    }
+    v_prev = v_hat_prev;
+
+    omega_hat_prev = AP::ahrs().get_gyro();
+    if (!mode29_finite(omega_hat_prev)) {
+        GCS_SEND_TEXT(MAV_SEVERITY_CRITICAL,
+                      "Mode29 rejected: invalid gyro state");
+        return false;
+    }
+    omega_prev = omega_hat_prev;
+
+    Vector3f entry_position;
+    if (!ahrs.get_relative_position_NED_origin(entry_position) ||
+        !mode29_finite(entry_position)) {
+        GCS_SEND_TEXT(MAV_SEVERITY_CRITICAL,
+                      "Mode29 rejected: invalid local position");
+        return false;
+    }
+
+    // This experiment intentionally uses the fixed NED-origin trajectory
+    // (0,0,0) -> (0,0,-1). Refuse Mode 29 if the aircraft is not physically
+    // near the mocap/EKF origin so it cannot suddenly fly back to the origin.
+    const float entry_xy =
+        sqrtf(entry_position.x * entry_position.x +
+              entry_position.y * entry_position.y);
+    if (entry_xy > MODE29_ENTRY_MAX_XY_M ||
+        fabsf(entry_position.z) > MODE29_ENTRY_MAX_Z_M) {
+        GCS_SEND_TEXT(MAV_SEVERITY_CRITICAL,
+                      "Mode29 rejected: origin offset xy=%.2fm z=%.2fm",
+                      (double)entry_xy,
+                      (double)entry_position.z);
+        return false;
+    }
+
+    Quaternion q;
+    ahrs.get_quat_body_to_ned(q);
+    if (!isfinite(q.q1) || !isfinite(q.q2) ||
+        !isfinite(q.q3) || !isfinite(q.q4)) {
+        GCS_SEND_TEXT(MAV_SEVERITY_CRITICAL,
+                      "Mode29 rejected: invalid attitude quaternion");
+        return false;
+    }
+    q.rotation_matrix(R_prev);
+
+    // Explicitly initialise every L1 state. Multiplying stale values by zero
+    // is unsafe because IEEE NaN * 0 is still NaN.
+    mode29_zero(u_b_prev);
+    mode29_zero(u_ad_prev);
+    mode29_zero(sigma_m_hat_prev);
+    mode29_zero(lpf1_prev);
+    mode29_zero(lpf2_prev);
+    sigma_um_hat_prev[0] = 0.0f;
+    sigma_um_hat_prev[1] = 0.0f;
+
+    trajIndex = g.trajIndex;
+    radiusX = g.circRadiusX;
+    radiusY = g.circRadiusY;
+    targetSpeed = g.circSpeed;
+
+    motorEnable = 1;
+
+    GCS_SEND_TEXT(MAV_SEVERITY_INFO,
+                  "Adaptive mode ready: origin xy=%.2fm z=%.2fm L1=%d",
+                  (double)entry_xy,
+                  (double)entry_position.z,
+                  (int)g.l1enable);
     return true;
 }
 
@@ -157,6 +230,29 @@ void ModeAdaptive::run()
         // do nothing
         break;
     }
+
+    // Do not execute any custom trajectory/controller/mixer math while
+    // disarmed. This prevents stale or invalid controller state from creating
+    // a latched ArduPilot internal error after an emergency disarm.
+    if (!motors->armed()) {
+        clear_motor_degradation_command();
+        return;
+    }
+
+    const auto abort_mode29 = [this](const char *reason) {
+        GCS_SEND_TEXT(MAV_SEVERITY_CRITICAL, "Mode29 abort: %s", reason);
+        clear_motor_degradation_command();
+        motorEnable = 0;
+
+        // Preserve ARM state and hand control back to the normal ArduCopter
+        // controller. If that mode transition ever fails, command minimum
+        // output as the final containment action.
+        if (!copter.set_mode(Mode::Number::STABILIZE, ModeReason::UNKNOWN)) {
+            for (uint8_t i = 0; i < 4; i++) {
+                motors->rc_write(i, 1000);
+            }
+        }
+    };
 
     // ===================================================
     // start custom code by ACRL
@@ -286,6 +382,19 @@ void ModeAdaptive::run()
         }
     }
 
+    // Reject any non-finite trajectory before it reaches the controller.
+    if (!mode29_finite(targetPos) ||
+        !mode29_finite(targetVel) ||
+        !mode29_finite(targetAcc) ||
+        !mode29_finite(targetJerk) ||
+        !mode29_finite(targetSnap) ||
+        !mode29_finite(targetYaw) ||
+        !mode29_finite(targetYaw_dot) ||
+        !mode29_finite(targetYaw_ddot)) {
+        abort_mode29("non-finite trajectory");
+        return;
+    }
+
     // initialize for landing mode
     if (g.LandFlag && !landingTriggered) 
     {
@@ -386,6 +495,11 @@ void ModeAdaptive::run()
     VectorN<float, 4> thrustMomentCmd;
     thrustMomentCmd = geometricController(targetPos, targetVel, targetAcc, targetJerk, targetSnap, targetYaw, targetYaw_dot, targetYaw_ddot);
 
+    if (!mode29_finite(thrustMomentCmd) || thrustMomentCmd[0] <= 0.0f) {
+        abort_mode29("invalid geometric-controller output");
+        return;
+    }
+
     if (yaw_free_active) {
         thrustMomentCmd[3] = 0.0f;
     }
@@ -401,9 +515,50 @@ void ModeAdaptive::run()
                        landingTriggered,
                        landingComplete);
 
-    // L1 adaptive augmentation
+    // L1 adaptive augmentation. When L1ENABLE=0, bypass the entire adaptive
+    // computation instead of calculating it and multiplying by zero later:
+    // IEEE NaN * 0 is still NaN and was the source of a Mode 29 flyaway.
     VectorN<float, 4> L1thrustMomentCmd;
-    L1thrustMomentCmd = L1AdaptiveAugmentation(thrustMomentCmd, yaw_free_active);
+    mode29_zero(L1thrustMomentCmd);
+
+    if (g.l1enable != 0) {
+        L1thrustMomentCmd =
+            L1AdaptiveAugmentation(thrustMomentCmd, yaw_free_active);
+
+        if (!mode29_finite(L1thrustMomentCmd)) {
+            abort_mode29("non-finite L1 output");
+            return;
+        }
+    } else {
+        // Keep the dormant predictor state finite and synchronised so a later
+        // disarmed configuration change cannot revive stale NaN state.
+        Vector3f v_now;
+        if (ahrs.get_velocity_NED(v_now) && mode29_finite(v_now)) {
+            v_prev = v_now;
+            v_hat_prev = v_now;
+        }
+
+        const Vector3f omega_now = AP::ahrs().get_gyro();
+        if (mode29_finite(omega_now)) {
+            omega_prev = omega_now;
+            omega_hat_prev = omega_now;
+        }
+
+        Quaternion q_now;
+        ahrs.get_quat_body_to_ned(q_now);
+        if (isfinite(q_now.q1) && isfinite(q_now.q2) &&
+            isfinite(q_now.q3) && isfinite(q_now.q4)) {
+            q_now.rotation_matrix(R_prev);
+        }
+
+        u_b_prev = thrustMomentCmd;
+        mode29_zero(u_ad_prev);
+        mode29_zero(sigma_m_hat_prev);
+        mode29_zero(lpf1_prev);
+        mode29_zero(lpf2_prev);
+        sigma_um_hat_prev[0] = 0.0f;
+        sigma_um_hat_prev[1] = 0.0f;
+    }
 
     // uncomment the lines below if you want to inject uncertainty to the control channels
     // thrustMomentCmd[0] = thrustMomentCmd[0] + 5 * sinf(0.5 * currentTime);
@@ -418,6 +573,14 @@ void ModeAdaptive::run()
         motorPWMCommanded = motorMixingYawFree(thrustMomentCmd + L1thrustMomentCmd);
     } else {
         motorPWMCommanded = motorMixing(thrustMomentCmd + L1thrustMomentCmd);
+    }
+
+    // Never pass NaN/Inf into constrain_float(). ArduPilot intentionally
+    // latches constraining_nan as an internal error, which then blocks future
+    // arming until reboot.
+    if (!mode29_finite(motorPWMCommanded)) {
+        abort_mode29("non-finite motor allocation");
+        return;
     }
 
     // Saturate the nominal actuator request before the injected effectiveness
