@@ -25,7 +25,7 @@ The matching firmware branch is:
 ## Install
 
 ```bash
-python3 -m pip install --user pymavlink pyserial
+python3 -m pip install --user -r orangepi/requirements.txt
 ```
 
 ## Required Pixhawk setup
@@ -63,6 +63,56 @@ TRAJINDEX=0
 LANDFLAG=0
 L1ENABLE=...
 ```
+
+## Mode 29 controller tuning profiles
+
+The runtime controller gains are ArduPilot `AP_Param` values. They can be changed without rebuilding or reflashing the firmware.
+
+The version-controlled source of truth is:
+
+```text
+orangepi/configs/mode29_baseline.yaml
+```
+
+The baseline currently contains:
+
+- `GEOCTRL_KP*`: position stiffness.
+- `GEOCTRL_KV*`: translational velocity damping.
+- `GEOCTRL_KR*`: attitude stiffness.
+- `GEOCTRL_KO*`: body-rate damping.
+- `L1ENABLE`, `ASV`, `ASOMEGA`, and the L1 cutoff frequencies.
+
+Before a flight, copy the baseline to a new experiment profile instead of editing the baseline in place:
+
+```bash
+cp orangepi/configs/mode29_baseline.yaml \
+   orangepi/configs/mode29_tuning_v1.yaml
+```
+
+Edit only the parameter(s) being tested, then preview the changes:
+
+```bash
+python3 orangepi/apply_mode29_config.py \
+  orangepi/configs/mode29_tuning_v1.yaml \
+  --dry-run
+```
+
+Apply them while the aircraft is **DISARMED**:
+
+```bash
+python3 orangepi/apply_mode29_config.py \
+  orangepi/configs/mode29_tuning_v1.yaml
+```
+
+The loader intentionally refuses to write while the vehicle is armed. Before every write it also saves the current controller values under:
+
+```text
+~/mode29_param_backups/
+```
+
+Every parameter write is read back from the Pixhawk and verified. If an application is interrupted after a partial write, the printed backup YAML can be applied with the same command to restore the pre-change values.
+
+The C++ values in `L1AC_customization/ArduCopter/config.h` are firmware defaults only. Normal controller tuning should be done through the YAML profiles and `apply_mode29_config.py`; changing the C++ defaults would require a rebuild and reflash.
 
 ## Flight sequence
 
