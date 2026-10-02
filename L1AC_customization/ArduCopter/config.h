@@ -274,6 +274,21 @@
 # define REAL_OR_SITL 1 // softdrone branch targets real hardware; 0 for SITL, 1 for REAL
 #endif
 
+// Mode 29 runtime-configurable takeoff defaults.
+// These values are AP_Param defaults only; normal tuning is performed from
+// the Orange Pi without rebuilding or reflashing the firmware.
+#ifndef M29_TKOFF_ALT_DEFAULT
+ #define M29_TKOFF_ALT_DEFAULT       1.0f
+#endif
+
+#ifndef M29_TKOFF_T_DEFAULT
+ #define M29_TKOFF_T_DEFAULT         4.0f
+#endif
+
+#ifndef M29_SETTLE_T_DEFAULT
+ #define M29_SETTLE_T_DEFAULT        1.5f
+#endif
+
 #if !REAL_OR_SITL
 // default ACRL controller parameters (SITL)
 #ifndef GEOCTRL_KPX_DEFAULT
