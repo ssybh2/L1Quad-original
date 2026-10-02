@@ -415,7 +415,12 @@ public:
         k_param_circRadiusX = 277, // circle radius or figure8's x radius
         k_param_circRadiusY,       // figure8's y radius (not used for circle radius)
         k_param_trajIndex,         // index of the trajectory to run
-        k_param_LandFlag = 280,    // flag of landing 
+        k_param_LandFlag = 280,    // flag of landing
+
+        // Mode 29 runtime trajectory configuration
+        k_param_m29_takeoff_alt = 281,  // takeoff/hover altitude above NED origin
+        k_param_m29_takeoff_time,       // smooth takeoff duration
+        k_param_m29_settle_time = 283,  // settle time before fault injection
 
         // the k_param_* space is 9-bits in size
         // 511: reserved
@@ -522,7 +527,12 @@ public:
     AP_Float circRadiusX; // circle radius or figure8's x radius
     AP_Float circRadiusY; // figure8's y radius (not used for circle radius)
     AP_Int8 trajIndex;    // index of the trajectory to run
-    AP_Int8 LandFlag;     // flag of landing 
+    AP_Int8 LandFlag;     // flag of landing
+
+    // Mode 29 runtime takeoff/hover configuration
+    AP_Float m29_takeoff_alt;  // altitude above NED origin, m (target z = -altitude)
+    AP_Float m29_takeoff_time; // takeoff duration, s
+    AP_Float m29_settle_time;  // wait after takeoff before fault injection, s
 
 #if MODE_THROW_ENABLED == ENABLED
     AP_Enum<ModeThrow::PreThrowMotorState>         throw_motor_start;
