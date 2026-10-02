@@ -10,6 +10,7 @@ The YAML file is the human-reviewed source of truth. This tool:
 
 import argparse
 from datetime import datetime
+import math
 from pathlib import Path
 import sys
 import time
@@ -38,6 +39,9 @@ ALLOWED_PARAMS = {
     "CTOFFQ1THRUST",
     "CTOFFQ1MOMENT",
     "CTOFFQ2MOMENT",
+    "M29_TKOFF_ALT",
+    "M29_TKOFF_T",
+    "M29_SETTLE_T",
 }
 
 
@@ -57,9 +61,12 @@ def collect_parameters(node, output):
             if key in ALLOWED_PARAMS:
                 if isinstance(value, bool) or not isinstance(value, (int, float)):
                     raise ValueError(f"{key} must be numeric")
+                value = float(value)
+                if not math.isfinite(value):
+                    raise ValueError(f"{key} must be finite")
                 if key in output:
                     raise ValueError(f"duplicate parameter {key}")
-                output[key] = float(value)
+                output[key] = value
             else:
                 collect_parameters(value, output)
     elif isinstance(node, list):
@@ -85,6 +92,7 @@ def load_profile(path):
                 if isinstance(key, str) and (
                     key.startswith("GEOCTRL_")
                     or key.startswith("CTOFF")
+                    or key.startswith("M29_")
                     or key in {"L1ENABLE", "ASV", "ASOMEGA"}
                 ) and key not in ALLOWED_PARAMS:
                     unknown.append(key)
@@ -97,6 +105,16 @@ def load_profile(path):
     unknown = sorted(set(find_unknown(document.get("parameters", {}))))
     if unknown:
         raise ValueError("unsupported parameter(s): " + ", ".join(unknown))
+
+    if "L1ENABLE" in params and params["L1ENABLE"] not in (0.0, 1.0):
+        raise ValueError("L1ENABLE must be 0 or 1")
+    if "M29_TKOFF_ALT" in params and not (0.2 <= params["M29_TKOFF_ALT"] <= 5.0):
+        raise ValueError("M29_TKOFF_ALT must be in [0.2, 5.0] m")
+    if "M29_TKOFF_T" in params and not (1.0 <= params["M29_TKOFF_T"] <= 15.0):
+        raise ValueError("M29_TKOFF_T must be in [1.0, 15.0] s")
+    if "M29_SETTLE_T" in params and not (0.0 <= params["M29_SETTLE_T"] <= 15.0):
+        raise ValueError("M29_SETTLE_T must be in [0.0, 15.0] s")
+
     return document, params
 
 
