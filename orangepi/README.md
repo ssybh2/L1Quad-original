@@ -131,66 +131,45 @@ angle gains, Roll/Pitch/Yaw rate P/I/D/FF gains, and `ATC_INPUT_TC`.
 
 ### Mode 29 runtime tuning
 
-The existing Mode 29 baseline remains:
+There is exactly one version-controlled Mode 29 configuration file:
 
 ```text
-orangepi/configs/mode29_baseline.yaml
-```
-
-The legacy Mode-29-only command is still supported:
-
-```bash
-python3 orangepi/apply_mode29_config.py \
-  orangepi/configs/mode29_baseline.yaml \
-  --dry-run
-```
-
-For new work, the unified tool can apply the same profile:
-
-```bash
-python3 orangepi/apply_flight_config.py \
-  orangepi/configs/mode29_baseline.yaml \
-  --dry-run
-```
-
-Mode 29 parameters currently supported by the unified tool are the
-`GEOCTRL_KP*`, `GEOCTRL_KV*`, `GEOCTRL_KR*`, `GEOCTRL_KO*`,
-`L1ENABLE`, `ASV`, `ASOMEGA`, the L1 cutoff parameters, plus the
-runtime trajectory parameters `M29_TKOFF_ALT`, `M29_TKOFF_T`, and
-`M29_SETTLE_T`.
-
-The takeoff trajectory is no longer fixed at 1 m in 2 s. It uses a normalized
-seventh-order smoothstep and scales it using `M29_TKOFF_ALT` and
-`M29_TKOFF_T`. `M29_SETTLE_T` controls the additional hover time before
-motor-degradation injection becomes eligible.
-
-### Recommended local working files
-
-Keep the version-controlled baselines unchanged as recovery references:
-
-```text
-orangepi/configs/stabilize_pid_baseline.yaml
-orangepi/configs/mode29_baseline.yaml
-```
-
-Use the existing version-controlled working profiles for tuning:
-
-```text
-orangepi/configs/stabilize_pid_tuning_v1.yaml
 orangepi/configs/mode29_tuning.yaml
 ```
 
-Do not create additional `mode29_tuning_v*.yaml` copies unless a specific
-experiment needs to be archived. For normal work there should be exactly one
-current Mode 29 tuning file: `mode29_tuning.yaml`.
+Edit this file for all Mode 29 runtime tuning. Do not create separate
+`mode29_baseline.yaml`, `mode29_tuning_v1.yaml`, or other duplicate Mode 29
+profiles during normal testing.
 
-This keeps the workflow simple: one recovery baseline plus one current working
-profile for each controller family. A combined duplicate profile is not needed.
+Preview changes while the Pixhawk is DISARMED:
 
-All of these values are runtime `AP_Param` values. Changing them through the
-Orange Pi does **not** require a new firmware build or a new flash. The C++
-values in `L1AC_customization/ArduCopter/config.h` remain firmware defaults,
-not the normal tuning workflow.
+```bash
+python3 orangepi/apply_flight_config.py \
+  orangepi/configs/mode29_tuning.yaml \
+  --dry-run
+```
+
+Apply the profile while DISARMED:
+
+```bash
+python3 orangepi/apply_flight_config.py \
+  orangepi/configs/mode29_tuning.yaml
+```
+
+Mode 29 parameters supported by the unified tool include
+`GEOCTRL_KP*`, `GEOCTRL_KV*`, `GEOCTRL_KR*`, `GEOCTRL_KO*`,
+`L1ENABLE`, `ASV`, `ASOMEGA`, the L1 cutoff parameters, and the runtime
+trajectory parameters `M29_TKOFF_ALT`, `M29_TKOFF_T`, and
+`M29_SETTLE_T`.
+
+The takeoff trajectory uses a normalized seventh-order smoothstep scaled by
+`M29_TKOFF_ALT` and `M29_TKOFF_T`. `M29_SETTLE_T` controls the extra
+hover time before motor-degradation injection becomes eligible.
+
+These values are runtime `AP_Param` values. Changing them through the Orange
+Pi does **not** require rebuilding or reflashing the firmware. The C++ values
+in `L1AC_customization/ArduCopter/config.h` are firmware defaults rather than
+the normal tuning workflow.
 
 ## Flight sequence
 
