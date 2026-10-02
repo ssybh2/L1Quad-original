@@ -134,6 +134,41 @@ bool ModeAdaptive::init(bool ignore_checks)
     radiusY = g.circRadiusY;
     targetSpeed = g.circSpeed;
 
+    const float configured_takeoff_alt = (float)g.m29_takeoff_alt;
+    const float configured_takeoff_time = (float)g.m29_takeoff_time;
+    const float configured_settle_time = (float)g.m29_settle_time;
+
+    if (!isfinite(configured_takeoff_alt) ||
+        configured_takeoff_alt < 0.2f ||
+        configured_takeoff_alt > 5.0f) {
+        GCS_SEND_TEXT(MAV_SEVERITY_CRITICAL,
+                      "Mode29 rejected: M29_TKOFF_ALT invalid");
+        return false;
+    }
+
+    if (!isfinite(configured_takeoff_time) ||
+        configured_takeoff_time < 1.0f ||
+        configured_takeoff_time > 15.0f) {
+        GCS_SEND_TEXT(MAV_SEVERITY_CRITICAL,
+                      "Mode29 rejected: M29_TKOFF_T invalid");
+        return false;
+    }
+
+    if (!isfinite(configured_settle_time) ||
+        configured_settle_time < 0.0f ||
+        configured_settle_time > 15.0f) {
+        GCS_SEND_TEXT(MAV_SEVERITY_CRITICAL,
+                      "Mode29 rejected: M29_SETTLE_T invalid");
+        return false;
+    }
+
+    // Freeze the trajectory configuration for this Mode29 run. The Orange Pi
+    // tool only writes these values while DISARMED, so a flight cannot change
+    // its reference trajectory halfway through the run.
+    takeoffAlt = configured_takeoff_alt;
+    takeoffTime = configured_takeoff_time;
+    settleTime = configured_settle_time;
+
     motorEnable = 1;
 
     GCS_SEND_TEXT(MAV_SEVERITY_INFO,
@@ -141,6 +176,11 @@ bool ModeAdaptive::init(bool ignore_checks)
                   (double)entry_xy,
                   (double)entry_position.z,
                   (int)g.l1enable);
+    GCS_SEND_TEXT(MAV_SEVERITY_INFO,
+                  "Mode29 takeoff: H=%.2fm T=%.2fs settle=%.2fs",
+                  (double)takeoffAlt,
+                  (double)takeoffTime,
+                  (double)settleTime);
     return true;
 }
 
@@ -292,19 +332,29 @@ void ModeAdaptive::run()
     Vector2f targetYaw_dot;
     Vector2f targetYaw_ddot;
 
-    // evaluate trajectories
-    if (timeInThisRun < 2)
+    // Evaluate trajectories. The base altitude and takeoff duration are
+    // runtime AP_Param values rather than firmware constants.
+    if (timeInThisRun < takeoffTime)
     {
-        // takeoff from (x,y,z) = (0,0,0) to (0,0,-1) in 2 secondss
-        ACRL_trajectory_takeoff(timeInThisRun, &targetPos, &targetVel, &targetAcc, &targetJerk, &targetSnap, &targetYaw, &targetYaw_dot, &targetYaw_ddot);
+        ACRL_trajectory_takeoff(timeInThisRun,
+                                takeoffAlt,
+                                takeoffTime,
+                                &targetPos,
+                                &targetVel,
+                                &targetAcc,
+                                &targetJerk,
+                                &targetSnap,
+                                &targetYaw,
+                                &targetYaw_dot,
+                                &targetYaw_ddot);
     }
     else
     {
         switch (trajIndex)
         {
-        case 0: // hover at 1 m above the NED origin
+        case 0: // hover at the runtime-configured altitude above NED origin
         {
-            targetPos = (Vector3f){0, 0, -1};
+            targetPos = (Vector3f){0, 0, -takeoffAlt};
             targetVel = (Vector3f){0, 0, 0};
             targetAcc = (Vector3f){0, 0, 0};
             targetJerk = (Vector3f){0, 0, 0};
@@ -314,62 +364,62 @@ void ModeAdaptive::run()
             targetYaw_ddot = (Vector2f){0, 0};
             break;
         }
-        case 1: // circular trajectory with variable yaw 
-        {   
+        case 1: // circular trajectory with variable yaw
+        {
             #if (!REAL_OR_SITL) // SITL
-                const float timeOffset = 2;
-                ACRL_trajectory_circle_variable_yaw(timeInThisRun, radiusX, timeOffset, targetSpeed, &targetPos, &targetVel, &targetAcc, &targetJerk, &targetSnap, &targetYaw, &targetYaw_dot, &targetYaw_ddot);
-            #elif (REAL_OR_SITL) // Real 
-            if (timeInThisRun >= 2 && timeInThisRun < 4)
-            {
-                // transition from (0,0,-1) to (0,-radiusX,-1) in 2 seconds
-                const float timeOffset = 2;
-                ACRL_trajectory_transition_to_start(timeInThisRun, radiusX, timeOffset, &targetPos, &targetVel, &targetAcc, &targetJerk, &targetSnap, &targetYaw, &targetYaw_dot, &targetYaw_ddot);
-            }
-            else if (timeInThisRun >= 4)
-            {   
-                // start the circle trajectory
-                const float timeOffset = 4;
-                ACRL_trajectory_circle_variable_yaw(timeInThisRun, radiusX, timeOffset, targetSpeed, &targetPos, &targetVel, &targetAcc, &targetJerk, &targetSnap, &targetYaw, &targetYaw_dot, &targetYaw_ddot);
-            }
+                const float timeOffset = takeoffTime;
+                ACRL_trajectory_circle_variable_yaw(timeInThisRun, radiusX, takeoffAlt, timeOffset, targetSpeed, &targetPos, &targetVel, &targetAcc, &targetJerk, &targetSnap, &targetYaw, &targetYaw_dot, &targetYaw_ddot);
+            #elif (REAL_OR_SITL) // Real
+                const float transitionDuration = 2.0f;
+                if (timeInThisRun < takeoffTime + transitionDuration)
+                {
+                    // Transition horizontally from the takeoff point to the
+                    // circle start while preserving the configured altitude.
+                    const float timeOffset = takeoffTime;
+                    ACRL_trajectory_transition_to_start(timeInThisRun, radiusX, takeoffAlt, timeOffset, &targetPos, &targetVel, &targetAcc, &targetJerk, &targetSnap, &targetYaw, &targetYaw_dot, &targetYaw_ddot);
+                }
+                else
+                {
+                    const float timeOffset = takeoffTime + transitionDuration;
+                    ACRL_trajectory_circle_variable_yaw(timeInThisRun, radiusX, takeoffAlt, timeOffset, targetSpeed, &targetPos, &targetVel, &targetAcc, &targetJerk, &targetSnap, &targetYaw, &targetYaw_dot, &targetYaw_ddot);
+                }
             #endif
             break;
         }
-        case 2: // circular trajectory with fixed yaw 
+        case 2: // circular trajectory with fixed yaw
         {
             #if (!REAL_OR_SITL) // SITL
-                const float timeOffset = 2;
-                ACRL_trajectory_circle_fixed_yaw(timeInThisRun, radiusX, timeOffset, targetSpeed, &targetPos, &targetVel, &targetAcc, &targetJerk, &targetSnap, &targetYaw, &targetYaw_dot, &targetYaw_ddot);
-            #elif (REAL_OR_SITL) // Real 
-            if (timeInThisRun >= 2 && timeInThisRun < 4)
-            {
-                // transition from (0,0,-1) to (0,-radiusX,-1) in 2 seconds
-                const float timeOffset = 2;
-                ACRL_trajectory_transition_to_start(timeInThisRun, radiusX, timeOffset, &targetPos, &targetVel, &targetAcc, &targetJerk, &targetSnap, &targetYaw, &targetYaw_dot, &targetYaw_ddot);
-            }
-            else if (timeInThisRun >= 4)
-            {   
-                // start the circle trajectory
-                const float timeOffset = 4;
-                ACRL_trajectory_circle_fixed_yaw(timeInThisRun, radiusX, timeOffset, targetSpeed, &targetPos, &targetVel, &targetAcc, &targetJerk, &targetSnap, &targetYaw, &targetYaw_dot, &targetYaw_ddot);
-            }
+                const float timeOffset = takeoffTime;
+                ACRL_trajectory_circle_fixed_yaw(timeInThisRun, radiusX, takeoffAlt, timeOffset, targetSpeed, &targetPos, &targetVel, &targetAcc, &targetJerk, &targetSnap, &targetYaw, &targetYaw_dot, &targetYaw_ddot);
+            #elif (REAL_OR_SITL) // Real
+                const float transitionDuration = 2.0f;
+                if (timeInThisRun < takeoffTime + transitionDuration)
+                {
+                    const float timeOffset = takeoffTime;
+                    ACRL_trajectory_transition_to_start(timeInThisRun, radiusX, takeoffAlt, timeOffset, &targetPos, &targetVel, &targetAcc, &targetJerk, &targetSnap, &targetYaw, &targetYaw_dot, &targetYaw_ddot);
+                }
+                else
+                {
+                    const float timeOffset = takeoffTime + transitionDuration;
+                    ACRL_trajectory_circle_fixed_yaw(timeInThisRun, radiusX, takeoffAlt, timeOffset, targetSpeed, &targetPos, &targetVel, &targetAcc, &targetJerk, &targetSnap, &targetYaw, &targetYaw_dot, &targetYaw_ddot);
+                }
             #endif
             break;
         }
-        case 3: // figure8 trajectory with fixed yaw 
+        case 3: // figure8 trajectory with fixed yaw
         {
-            ACRL_trajectory_figure8_fixed_yaw(timeInThisRun, radiusX, radiusY, targetSpeed, &targetPos, &targetVel, &targetAcc, &targetJerk, &targetSnap, &targetYaw, &targetYaw_dot, &targetYaw_ddot);
+            ACRL_trajectory_figure8_fixed_yaw(timeInThisRun, radiusX, radiusY, takeoffAlt, takeoffTime, targetSpeed, &targetPos, &targetVel, &targetAcc, &targetJerk, &targetSnap, &targetYaw, &targetYaw_dot, &targetYaw_ddot);
             break;
         }
-        case 4: // cy45 add: figure8 trajectory with tilted altitude
+        case 4: // figure8 trajectory with tilted altitude
         {
-            ACRL_trajectory_figure8_tilted(timeInThisRun, radiusX, radiusY, targetSpeed, &targetPos, &targetVel, &targetAcc, &targetJerk, &targetSnap, &targetYaw, &targetYaw_dot, &targetYaw_ddot);
+            ACRL_trajectory_figure8_tilted(timeInThisRun, radiusX, radiusY, takeoffAlt, takeoffTime, targetSpeed, &targetPos, &targetVel, &targetAcc, &targetJerk, &targetSnap, &targetYaw, &targetYaw_dot, &targetYaw_ddot);
             break;
         }
         default:
         {
             GCS_SEND_TEXT(MAV_SEVERITY_ERROR, "Wrong trajectory index. Drone will hover.");
-            targetPos = (Vector3f){0, 0, -1};
+            targetPos = (Vector3f){0, 0, -takeoffAlt};
             targetVel = (Vector3f){0, 0, 0};
             targetAcc = (Vector3f){0, 0, 0};
             targetJerk = (Vector3f){0, 0, 0};
@@ -470,13 +520,13 @@ void ModeAdaptive::run()
     const uint32_t motor_deg_age_ms =
         motor_degradation_last_rx_ms == 0U ? 999999U : motor_deg_now_ms - motor_degradation_last_rx_ms;
 
-    // Motor derating is only permitted for the 1 m hover experiment, after
-    // takeoff has finished and the vehicle has had one second to settle.
+    // Motor derating is only permitted for the hover experiment after the
+    // runtime-configured takeoff and settle intervals have both completed.
     const bool motor_degradation_active =
         motors->armed() &&
         trajIndex == 0 &&
         !g.LandFlag &&
-        timeInThisRun >= 3.0f &&
+        timeInThisRun >= (takeoffTime + settleTime) &&
         motor_degradation_loss_pct > 0.0f &&
         motor_degradation_command_fresh(motor_deg_now_ms);
 
