@@ -3,7 +3,7 @@
 #
 # This file is the version-controlled tuning source of truth.
 # Apply it to the Pixhawk only while DISARMED:
-#   python3 orangepi/apply_mode29_config.py orangepi/configs/mode29_baseline.yaml
+#   python3 orangepi/apply_flight_config.py orangepi/configs/mode29_baseline.yaml
 #
 # These are runtime AP_Param values. Editing this YAML and applying it does
 # NOT require rebuilding or reflashing the ArduPilot firmware.
@@ -17,6 +17,14 @@ profile:
   firmware_branch: feature/softdrone-motor-degradation-yaw-free
 
 parameters:
+  trajectory:
+    # Positive altitude above the NED origin. Mode29 target z = -M29_TKOFF_ALT.
+    M29_TKOFF_ALT: 1.0
+    # Seventh-order smooth takeoff duration.
+    M29_TKOFF_T: 4.0
+    # Extra hover time after takeoff before motor degradation is permitted.
+    M29_SETTLE_T: 1.5
+
   geometric_position:
     GEOCTRL_KPX: 14.0
     GEOCTRL_KPY: 15.0
