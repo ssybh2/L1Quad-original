@@ -53,6 +53,9 @@ MODE29_PARAMS = {
     "CTOFFQ1THRUST",
     "CTOFFQ1MOMENT",
     "CTOFFQ2MOMENT",
+    "M29_TKOFF_ALT",
+    "M29_TKOFF_T",
+    "M29_SETTLE_T",
 }
 
 ARDUCOPTER_ATTITUDE_PARAMS = {
@@ -123,6 +126,7 @@ def find_unknown_controller_params(node):
                     key.startswith("GEOCTRL_")
                     or key.startswith("CTOFF")
                     or key.startswith("ATC_")
+                    or key.startswith("M29_")
                     or key in {"L1ENABLE", "ASV", "ASOMEGA"}
                 )
                 if controller_like and key not in ALLOWED_PARAMS:
@@ -154,6 +158,13 @@ def load_profile(path):
 
     if "L1ENABLE" in requested and requested["L1ENABLE"] not in (0.0, 1.0):
         raise ValueError("L1ENABLE must be 0 or 1")
+
+    if "M29_TKOFF_ALT" in requested and not (0.2 <= requested["M29_TKOFF_ALT"] <= 5.0):
+        raise ValueError("M29_TKOFF_ALT must be in [0.2, 5.0] m")
+    if "M29_TKOFF_T" in requested and not (1.0 <= requested["M29_TKOFF_T"] <= 15.0):
+        raise ValueError("M29_TKOFF_T must be in [1.0, 15.0] s")
+    if "M29_SETTLE_T" in requested and not (0.0 <= requested["M29_SETTLE_T"] <= 15.0):
+        raise ValueError("M29_SETTLE_T must be in [0.0, 15.0] s")
 
     return document, requested
 
