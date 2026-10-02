@@ -155,7 +155,7 @@ def main():
     print(f"connected: sysid={target_system} compid={target_component}")
 
     if args.command == "status":
-        for name in ("SYSID_MYGCS", "RC_OVERRIDE_TIME", "FLTMODE_CH", "RC9_OPTION", "RC10_OPTION", "RC11_OPTION", "RC12_OPTION", "TRAJINDEX", "LANDFLAG", "L1ENABLE"):
+        for name in ("SYSID_MYGCS", "RC_OVERRIDE_TIME", "FLTMODE_CH", "RC9_OPTION", "RC10_OPTION", "RC11_OPTION", "RC12_OPTION", "TRAJINDEX", "LANDFLAG", "L1ENABLE", "M29_TKOFF_ALT", "M29_TKOFF_T", "M29_SETTLE_T"):
             value = request_param(m, target_system, target_component, name)
             print(f"{name}={value}")
         return 0
@@ -185,10 +185,19 @@ def main():
 
     trajindex = request_param(m, target_system, target_component, "TRAJINDEX")
     landflag = request_param(m, target_system, target_component, "LANDFLAG")
+    takeoff_time = request_param(m, target_system, target_component, "M29_TKOFF_T")
+    settle_time = request_param(m, target_system, target_component, "M29_SETTLE_T")
     if trajindex is None or int(round(trajindex)) != 0:
         raise SystemExit(f"TRAJINDEX must be 0 for the hover experiment; got {trajindex}")
     if landflag is None or int(round(landflag)) != 0:
         raise SystemExit(f"LANDFLAG must be 0; got {landflag}")
+
+    if takeoff_time is not None and settle_time is not None:
+        print(
+            f"firmware fault gate: active only after "
+            f"{takeoff_time + settle_time:.1f}s in Mode29 "
+            f"(takeoff={takeoff_time:.1f}s + settle={settle_time:.1f}s)"
+        )
 
     print("waiting for ARMED + Mode 29...")
     if not wait_for_armed_mode29(m, args.wait_mode29):
