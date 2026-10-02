@@ -3,7 +3,7 @@
 # Purpose:
 #   - This is the single working Mode29 profile for real-airframe testing.
 #   - Edit this file when tuning Mode29.
-#   - Keep mode29_baseline.yaml unchanged as the recovery reference.
+#   - This is the only Mode29 YAML profile kept in the repository.
 #
 # Firmware:
 #   feature/softdrone-0189-runtime-takeoff
@@ -26,7 +26,7 @@ version: 1
 profile:
   name: mode29_tuning
   airframe: softdrone
-  description: Current real-airframe Mode29 working profile based on the 0189 safety baseline with runtime-configurable takeoff.
+  description: Current real-airframe Mode29 working profile with runtime-configurable takeoff.
   firmware_branch: feature/softdrone-0189-runtime-takeoff
 
 parameters:
