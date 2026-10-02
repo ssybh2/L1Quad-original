@@ -155,7 +155,14 @@ python3 orangepi/apply_flight_config.py \
 
 Mode 29 parameters currently supported by the unified tool are the
 `GEOCTRL_KP*`, `GEOCTRL_KV*`, `GEOCTRL_KR*`, `GEOCTRL_KO*`,
-`L1ENABLE`, `ASV`, `ASOMEGA`, and L1 cutoff parameters.
+`L1ENABLE`, `ASV`, `ASOMEGA`, the L1 cutoff parameters, plus the
+runtime trajectory parameters `M29_TKOFF_ALT`, `M29_TKOFF_T`, and
+`M29_SETTLE_T`.
+
+The takeoff trajectory is no longer fixed at 1 m in 2 s. It uses a normalized
+seventh-order smoothstep and scales it using `M29_TKOFF_ALT` and
+`M29_TKOFF_T`. `M29_SETTLE_T` controls the additional hover time before
+motor-degradation injection becomes eligible.
 
 ### Recommended local working files
 
@@ -192,10 +199,10 @@ not the normal tuning workflow.
 3. Put the aircraft physically near the mocap `(0,0,0)` origin.
 4. Arm with the normal RC procedure.
 5. Use the RC flight-mode switch to enter Mode 29.
-6. Mode 29 performs its existing 2 s takeoff from `(0,0,0)` to `(0,0,-1)`.
-7. `TRAJINDEX=0` then holds `(0,0,-1)`.
-8. The firmware refuses motor derating until Mode 29 has been active for at least 3 s.
-9. Start the Orange Pi command.
+6. Mode 29 performs a smooth takeoff using `M29_TKOFF_ALT` and `M29_TKOFF_T`.
+7. `TRAJINDEX=0` then holds `z=-M29_TKOFF_ALT` at the NED origin.
+8. Motor derating is refused until `M29_TKOFF_T + M29_SETTLE_T` has elapsed.
+9. Start the Orange Pi fault command only after the aircraft has visibly settled.
 
 Example: Motor 1 has a 20% thrust-effectiveness loss for 5 s and yaw is released:
 
