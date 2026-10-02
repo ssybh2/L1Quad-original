@@ -1991,6 +1991,9 @@ public:
     int8_t trajIndex; // index of the trajectory
     int8_t motorEnable; // whether to raise motor PWM
     float targetSpeed; // target speed of the trajectory
+    float takeoffAlt;  // Mode29 takeoff/hover altitude above NED origin, m
+    float takeoffTime; // Mode29 smooth takeoff duration, s
+    float settleTime;  // post-takeoff settle time before fault injection, s
 
     // the variables below are defined for the landing procedure
     uint8_t landingTriggered; // indicator of whether a landing command has been triggered (via setting g2.landingFlag to 1)
