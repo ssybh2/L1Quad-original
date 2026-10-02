@@ -64,55 +64,138 @@ LANDFLAG=0
 L1ENABLE=...
 ```
 
-## Mode 29 controller tuning profiles
+## Runtime controller tuning from the Orange Pi
 
-The runtime controller gains are ArduPilot `AP_Param` values. They can be changed without rebuilding or reflashing the firmware.
+Both controller families can now be changed through MAVLink `AP_Param` values
+without rebuilding or reflashing the firmware.
 
-The version-controlled source of truth is:
+There are two distinct control stacks:
+
+- ArduCopter `ATC_*` parameters tune the normal ArduCopter attitude/rate
+  controller used by STABILIZE and related normal flight modes.
+- `GEOCTRL_*` and the L1 parameters tune the custom Mode 29 controller.
+
+Mode 29 directly computes geometric-control moments and performs its own motor
+allocation, so its primary controller does **not** reuse
+`ATC_RAT_*` / `ATC_ANG_*` gains. The unified Orange Pi tool supports both
+families in one workflow because it is useful to version, compare, back up, and
+restore them together.
+
+The unified tool is:
+
+```text
+orangepi/apply_flight_config.py
+```
+
+It intentionally:
+
+- refuses to write while the vehicle is ARMED;
+- accepts only an explicit controller-parameter whitelist;
+- rejects NaN/Inf values;
+- reads all current values before changing anything;
+- saves an automatic pre-change backup under `~/flight_param_backups/`;
+- writes one parameter at a time and verifies the Pixhawk readback.
+
+### Current STABILIZE/manual baseline
+
+The 2026-10-02 values captured from the aircraft are stored in:
+
+```text
+orangepi/configs/stabilize_pid_baseline.yaml
+```
+
+To make an experiment profile:
+
+```bash
+cp orangepi/configs/stabilize_pid_baseline.yaml \
+   orangepi/configs/stabilize_pid_tuning_v1.yaml
+```
+
+Edit only the parameter(s) being tested, preview the changes:
+
+```bash
+python3 orangepi/apply_flight_config.py \
+  orangepi/configs/stabilize_pid_tuning_v1.yaml \
+  --dry-run
+```
+
+Then apply them while **DISARMED**:
+
+```bash
+python3 orangepi/apply_flight_config.py \
+  orangepi/configs/stabilize_pid_tuning_v1.yaml
+```
+
+The supported normal-flight controller parameters include the Roll/Pitch/Yaw
+angle gains, Roll/Pitch/Yaw rate P/I/D/FF gains, and `ATC_INPUT_TC`.
+
+### Mode 29 runtime tuning
+
+The existing Mode 29 baseline remains:
 
 ```text
 orangepi/configs/mode29_baseline.yaml
 ```
 
-The baseline currently contains:
-
-- `GEOCTRL_KP*`: position stiffness.
-- `GEOCTRL_KV*`: translational velocity damping.
-- `GEOCTRL_KR*`: attitude stiffness.
-- `GEOCTRL_KO*`: body-rate damping.
-- `L1ENABLE`, `ASV`, `ASOMEGA`, and the L1 cutoff frequencies.
-
-Before a flight, copy the baseline to a new experiment profile instead of editing the baseline in place:
-
-```bash
-cp orangepi/configs/mode29_baseline.yaml \
-   orangepi/configs/mode29_tuning_v1.yaml
-```
-
-Edit only the parameter(s) being tested, then preview the changes:
+The legacy Mode-29-only command is still supported:
 
 ```bash
 python3 orangepi/apply_mode29_config.py \
-  orangepi/configs/mode29_tuning_v1.yaml \
+  orangepi/configs/mode29_baseline.yaml \
   --dry-run
 ```
 
-Apply them while the aircraft is **DISARMED**:
+For new work, the unified tool can apply the same profile:
 
 ```bash
-python3 orangepi/apply_mode29_config.py \
-  orangepi/configs/mode29_tuning_v1.yaml
+python3 orangepi/apply_flight_config.py \
+  orangepi/configs/mode29_baseline.yaml \
+  --dry-run
 ```
 
-The loader intentionally refuses to write while the vehicle is armed. Before every write it also saves the current controller values under:
+Mode 29 parameters currently supported by the unified tool are the
+`GEOCTRL_KP*`, `GEOCTRL_KV*`, `GEOCTRL_KR*`, `GEOCTRL_KO*`,
+`L1ENABLE`, `ASV`, `ASOMEGA`, and L1 cutoff parameters.
+
+### Combined profile
+
+A single profile containing both the current ArduCopter attitude baseline and
+the current Mode 29 baseline is provided at:
 
 ```text
-~/mode29_param_backups/
+orangepi/configs/flight_tuning_template.yaml
 ```
 
-Every parameter write is read back from the Pixhawk and verified. If an application is interrupted after a partial write, the printed backup YAML can be applied with the same command to restore the pre-change values.
+Copy it before editing:
 
-The C++ values in `L1AC_customization/ArduCopter/config.h` are firmware defaults only. Normal controller tuning should be done through the YAML profiles and `apply_mode29_config.py`; changing the C++ defaults would require a rebuild and reflash.
+```bash
+cp orangepi/configs/flight_tuning_template.yaml \
+   orangepi/configs/flight_tuning_v1.yaml
+```
+
+Preview:
+
+```bash
+python3 orangepi/apply_flight_config.py \
+  orangepi/configs/flight_tuning_v1.yaml \
+  --dry-run
+```
+
+Apply while DISARMED:
+
+```bash
+python3 orangepi/apply_flight_config.py \
+  orangepi/configs/flight_tuning_v1.yaml
+```
+
+If a write is interrupted after a partial update, the tool prints the exact
+backup YAML path. Restore that backup with the same
+`apply_flight_config.py` command while DISARMED.
+
+All of these values are runtime `AP_Param` values. Changing them through the
+Orange Pi does **not** require a new firmware build or a new flash. The C++
+values in `L1AC_customization/ArduCopter/config.h` remain firmware defaults,
+not the normal tuning workflow.
 
 ## Flight sequence
 
