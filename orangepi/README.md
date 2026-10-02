@@ -157,40 +157,28 @@ Mode 29 parameters currently supported by the unified tool are the
 `GEOCTRL_KP*`, `GEOCTRL_KV*`, `GEOCTRL_KR*`, `GEOCTRL_KO*`,
 `L1ENABLE`, `ASV`, `ASOMEGA`, and L1 cutoff parameters.
 
-### Combined profile
+### Recommended local working files
 
-A single profile containing both the current ArduCopter attitude baseline and
-the current Mode 29 baseline is provided at:
+Keep the two version-controlled baselines unchanged as recovery references:
 
 ```text
-orangepi/configs/flight_tuning_template.yaml
+orangepi/configs/stabilize_pid_baseline.yaml
+orangepi/configs/mode29_baseline.yaml
 ```
 
-Copy it before editing:
+Create one working copy for each controller family when tuning:
 
 ```bash
-cp orangepi/configs/flight_tuning_template.yaml \
-   orangepi/configs/flight_tuning_v1.yaml
+cp orangepi/configs/stabilize_pid_baseline.yaml \
+   orangepi/configs/stabilize_pid_tuning_v1.yaml
+
+cp orangepi/configs/mode29_baseline.yaml \
+   orangepi/configs/mode29_tuning_v1.yaml
 ```
 
-Preview:
-
-```bash
-python3 orangepi/apply_flight_config.py \
-  orangepi/configs/flight_tuning_v1.yaml \
-  --dry-run
-```
-
-Apply while DISARMED:
-
-```bash
-python3 orangepi/apply_flight_config.py \
-  orangepi/configs/flight_tuning_v1.yaml
-```
-
-If a write is interrupted after a partial update, the tool prints the exact
-backup YAML path. Restore that backup with the same
-`apply_flight_config.py` command while DISARMED.
+This keeps the workflow simple: one file for normal ArduCopter/STABILIZE
+tuning and one file for Mode 29 tuning. A combined duplicate profile is not
+needed.
 
 All of these values are runtime `AP_Param` values. Changing them through the
 Orange Pi does **not** require a new firmware build or a new flash. The C++
