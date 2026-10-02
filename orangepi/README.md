@@ -166,26 +166,26 @@ motor-degradation injection becomes eligible.
 
 ### Recommended local working files
 
-Keep the two version-controlled baselines unchanged as recovery references:
+Keep the version-controlled baselines unchanged as recovery references:
 
 ```text
 orangepi/configs/stabilize_pid_baseline.yaml
 orangepi/configs/mode29_baseline.yaml
 ```
 
-Create one working copy for each controller family when tuning:
+Use the existing version-controlled working profiles for tuning:
 
-```bash
-cp orangepi/configs/stabilize_pid_baseline.yaml \
-   orangepi/configs/stabilize_pid_tuning_v1.yaml
-
-cp orangepi/configs/mode29_baseline.yaml \
-   orangepi/configs/mode29_tuning_v1.yaml
+```text
+orangepi/configs/stabilize_pid_tuning_v1.yaml
+orangepi/configs/mode29_tuning.yaml
 ```
 
-This keeps the workflow simple: one file for normal ArduCopter/STABILIZE
-tuning and one file for Mode 29 tuning. A combined duplicate profile is not
-needed.
+Do not create additional `mode29_tuning_v*.yaml` copies unless a specific
+experiment needs to be archived. For normal work there should be exactly one
+current Mode 29 tuning file: `mode29_tuning.yaml`.
+
+This keeps the workflow simple: one recovery baseline plus one current working
+profile for each controller family. A combined duplicate profile is not needed.
 
 All of these values are runtime `AP_Param` values. Changing them through the
 Orange Pi does **not** require a new firmware build or a new flash. The C++
