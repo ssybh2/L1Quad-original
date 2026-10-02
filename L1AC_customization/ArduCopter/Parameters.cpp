@@ -612,6 +612,33 @@ const AP_Param::Info Copter::var_info[] = {
     // @Range: 0 1
     // @User: Advanced
     GSCALAR(LandFlag, "LANDFLAG", LANDFLAG_DEFAULT),
+
+    // @Param: M29_TKOFF_ALT
+    // @DisplayName: Mode29 takeoff altitude
+    // @Description: Target altitude above the NED origin for Mode29 takeoff and hover. The NED target z is the negative of this value.
+    // @Units: m
+    // @Range: 0.2 5.0
+    // @Increment: 0.1
+    // @User: Advanced
+    GSCALAR(m29_takeoff_alt, "M29_TKOFF_ALT", M29_TKOFF_ALT_DEFAULT),
+
+    // @Param: M29_TKOFF_T
+    // @DisplayName: Mode29 takeoff duration
+    // @Description: Duration of the seventh-order smooth Mode29 takeoff trajectory.
+    // @Units: s
+    // @Range: 1.0 15.0
+    // @Increment: 0.1
+    // @User: Advanced
+    GSCALAR(m29_takeoff_time, "M29_TKOFF_T", M29_TKOFF_T_DEFAULT),
+
+    // @Param: M29_SETTLE_T
+    // @DisplayName: Mode29 settle time
+    // @Description: Time to remain at the takeoff altitude before motor degradation is permitted.
+    // @Units: s
+    // @Range: 0.0 15.0
+    // @Increment: 0.1
+    // @User: Advanced
+    GSCALAR(m29_settle_time, "M29_SETTLE_T", M29_SETTLE_T_DEFAULT),
 #endif
 
     // ACRO_RP_EXPO moved to Command Model class
