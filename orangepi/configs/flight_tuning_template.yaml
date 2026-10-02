@@ -1,0 +1,86 @@
+# Softdrone unified runtime tuning template
+#
+# This profile intentionally contains both controller families:
+#   1) ArduCopter ATC_* gains used by STABILIZE / normal attitude control.
+#   2) Custom Mode 29 GEOCTRL_*/L1 gains.
+#
+# IMPORTANT:
+# Mode 29 directly computes geometric-control moments and motor allocation.
+# Its primary controller does NOT reuse ATC_RAT_* / ATC_ANG_* gains.
+# The two families are kept in one YAML only so they can be tuned, backed up,
+# reviewed, and restored through one Orange Pi workflow.
+#
+# Preview:
+#   python3 orangepi/apply_flight_config.py \
+#     orangepi/configs/flight_tuning_template.yaml --dry-run
+#
+# Apply only while DISARMED:
+#   python3 orangepi/apply_flight_config.py \
+#     orangepi/configs/flight_tuning_template.yaml
+#
+# No firmware rebuild or reflash is required.
+
+version: 1
+
+profile:
+  name: flight_tuning_template
+  airframe: softdrone
+  description: Combined ArduCopter attitude and Mode29 controller baseline.
+  firmware_branch: feature/softdrone-motor-degradation-yaw-free
+
+parameters:
+  arducopter_attitude:
+    angle_loop:
+      ATC_ANG_RLL_P: 4.5
+      ATC_ANG_PIT_P: 4.5
+      ATC_ANG_YAW_P: 4.5
+
+    rate_roll:
+      ATC_RAT_RLL_P: 0.135
+      ATC_RAT_RLL_I: 0.135
+      ATC_RAT_RLL_D: 0.0036
+      ATC_RAT_RLL_FF: 0.0
+
+    rate_pitch:
+      ATC_RAT_PIT_P: 0.135
+      ATC_RAT_PIT_I: 0.135
+      ATC_RAT_PIT_D: 0.0036
+      ATC_RAT_PIT_FF: 0.0
+
+    rate_yaw:
+      ATC_RAT_YAW_P: 0.18
+      ATC_RAT_YAW_I: 0.018
+      ATC_RAT_YAW_D: 0.0
+      ATC_RAT_YAW_FF: 0.0
+
+    input_shaping:
+      ATC_INPUT_TC: 0.15
+
+  mode29:
+    geometric_position:
+      GEOCTRL_KPX: 14.0
+      GEOCTRL_KPY: 15.0
+      GEOCTRL_KPZ: 15.0
+
+    geometric_velocity:
+      GEOCTRL_KVX: 1.5
+      GEOCTRL_KVY: 0.9
+      GEOCTRL_KVZ: 1.1
+
+    geometric_attitude:
+      GEOCTRL_KRX: 0.55
+      GEOCTRL_KRY: 0.35
+      GEOCTRL_KRZ: 0.15
+
+    geometric_rate:
+      GEOCTRL_KOX: 0.035
+      GEOCTRL_KOY: 0.030
+      GEOCTRL_KOZ: 0.004
+
+    l1:
+      L1ENABLE: 0
+      ASV: -5.0
+      ASOMEGA: -10.0
+      CTOFFQ1THRUST: 30.0
+      CTOFFQ1MOMENT: 5.0
+      CTOFFQ2MOMENT: 15.0
