@@ -12,6 +12,8 @@
 // Urbana, IL 61821, USA
 
 void ACRL_trajectory_takeoff(float timeInThisRun,
+                             float targetAltitude,
+                             float duration,
                              Vector3f *targetPos,
                              Vector3f *targetVel,
                              Vector3f *targetAcc,
@@ -21,34 +23,43 @@ void ACRL_trajectory_takeoff(float timeInThisRun,
                              Vector2f *targetYaw_dot,
                              Vector2f *targetYaw_ddot)
 {
-    // The function ACRL_trajectory_takeoff function evaluates the takeoff trajectory.
-    // The order of the polynomial coefficients follow the matlab definition.
-    float polyCoef[8] = {-0.1563, 1.0938, -2.6250, 2.1875, 0, 0, 0, 0};
-    if (timeInThisRun < 2) // only takeoff during the first 2 seconds when entering mode ADAPTIVE
-    {
-        *targetPos = (Vector3f){0, 0, -polyEval(polyCoef, timeInThisRun, 8)};
-        
-        *targetVel = (Vector3f){0, 0, -polyDiffEval(polyCoef, timeInThisRun, 8)};
+    // Seventh-order smoothstep trajectory. The shape is normalized in
+    // s=t/T so both altitude H and duration T are runtime parameters:
+    //   p(s) = 35s^4 - 84s^5 + 70s^6 - 20s^7,  s in [0,1].
+    // Position, velocity, acceleration and jerk are zero at both ends.
+    const float s = constrain_float(timeInThisRun / duration, 0.0f, 1.0f);
+    const float s2 = s * s;
+    const float s3 = s2 * s;
+    const float s4 = s3 * s;
+    const float s5 = s4 * s;
+    const float s6 = s5 * s;
+    const float s7 = s6 * s;
 
-        *targetAcc = (Vector3f){0, 0, -polyDiff2Eval(polyCoef, timeInThisRun, 8)};
+    const float p = 35.0f * s4 - 84.0f * s5 + 70.0f * s6 - 20.0f * s7;
+    const float dp_ds = 140.0f * s3 - 420.0f * s4 + 420.0f * s5 - 140.0f * s6;
+    const float d2p_ds2 = 420.0f * s2 - 1680.0f * s3 + 2100.0f * s4 - 840.0f * s5;
+    const float d3p_ds3 = 840.0f * s - 5040.0f * s2 + 8400.0f * s3 - 4200.0f * s4;
+    const float d4p_ds4 = 840.0f - 10080.0f * s + 25200.0f * s2 - 16800.0f * s3;
 
-        *targetJerk = (Vector3f){0, 0, -polyDiff3Eval(polyCoef, timeInThisRun, 8)};
+    const float invT = 1.0f / duration;
+    const float invT2 = invT * invT;
+    const float invT3 = invT2 * invT;
+    const float invT4 = invT3 * invT;
 
-        *targetSnap = (Vector3f){0, 0, -polyDiff4Eval(polyCoef, timeInThisRun, 8)};
+    *targetPos = (Vector3f){0, 0, -targetAltitude * p};
+    *targetVel = (Vector3f){0, 0, -targetAltitude * dp_ds * invT};
+    *targetAcc = (Vector3f){0, 0, -targetAltitude * d2p_ds2 * invT2};
+    *targetJerk = (Vector3f){0, 0, -targetAltitude * d3p_ds3 * invT3};
+    *targetSnap = (Vector3f){0, 0, -targetAltitude * d4p_ds4 * invT4};
 
-        *targetYaw = (Vector2f){1, 0};
-        *targetYaw_dot = (Vector2f){0, 0};
-        *targetYaw_ddot = (Vector2f){0, 0};
-    }
-    else
-    {
-        // print the error information that the quadrotor cannot take off
-        gcs().send_text(MAV_SEVERITY_INFO, "Quadrotor cannot takeoff: time is %f > 2 s.", timeInThisRun);
-    }
+    *targetYaw = (Vector2f){1, 0};
+    *targetYaw_dot = (Vector2f){0, 0};
+    *targetYaw_ddot = (Vector2f){0, 0};
 }
 
 void ACRL_trajectory_transition_to_start(float timeInThisRun,
                              float radiusX,
+                             float targetAltitude,
                              float timeOffset,
                              Vector3f *targetPos,
                              Vector3f *targetVel,
@@ -64,7 +75,7 @@ void ACRL_trajectory_transition_to_start(float timeInThisRun,
     float polyCoef[8] = {-0.1563, 1.0938, -2.6250, 2.1875, 0, 0, 0, 0};
     if (timeInThisRun >= timeOffset && timeInThisRun <= timeOffset + 2) // only do the transition in 2-4 seconds when entering mode ADAPTIVE
     {
-        *targetPos = (Vector3f){0, -radiusX * polyEval(polyCoef, timeInThisRun - timeOffset, 8), -1};
+        *targetPos = (Vector3f){0, -radiusX * polyEval(polyCoef, timeInThisRun - timeOffset, 8), -targetAltitude};
         
         *targetVel = (Vector3f){0, -radiusX * polyDiffEval(polyCoef, timeInThisRun - timeOffset, 8), 0};
 
@@ -89,6 +100,7 @@ void ACRL_trajectory_transition_to_start(float timeInThisRun,
 
 void ACRL_trajectory_circle_variable_yaw(float timeInThisRun,
                                          float radius,
+                                         float targetAltitude,
                                          float initialTimeOffset,
                                          float targetSpeed,
                                          Vector3f *targetPos,
@@ -142,9 +154,9 @@ void ACRL_trajectory_circle_variable_yaw(float timeInThisRun,
     netTime = timeInThisRun - timeOffset; // time reference for this speed
 
     #if (!REAL_OR_SITL) // SITL
-        *targetPos = (Vector3f){radius * sinf(currentSpeed * netTime), radius * (1 - cosf(currentSpeed * netTime)), -1};
+        *targetPos = (Vector3f){radius * sinf(currentSpeed * netTime), radius * (1 - cosf(currentSpeed * netTime)), -targetAltitude};
     #elif (REAL_OR_SITL) // Real 
-        *targetPos = (Vector3f){radius * sinf(currentSpeed * netTime), radius * (-cosf(currentSpeed * netTime)), -1};
+        *targetPos = (Vector3f){radius * sinf(currentSpeed * netTime), radius * (-cosf(currentSpeed * netTime)), -targetAltitude};
     #endif
 
     *targetVel = (Vector3f){radius * currentSpeed * cosf(currentSpeed * netTime), radius * currentSpeed * sinf(currentSpeed * netTime), 0};
@@ -162,6 +174,7 @@ void ACRL_trajectory_circle_variable_yaw(float timeInThisRun,
 
 void ACRL_trajectory_circle_fixed_yaw(float timeInThisRun,
                                       float radius,
+                                      float targetAltitude,
                                       float initialTimeOffset,
                                       float targetSpeed,
                                       Vector3f *targetPos,
@@ -215,9 +228,9 @@ void ACRL_trajectory_circle_fixed_yaw(float timeInThisRun,
     netTime = timeInThisRun - timeOffset; // time reference for this speed
 
     #if (!REAL_OR_SITL) // SITL
-        *targetPos = (Vector3f){radius * sinf(currentSpeed * netTime), radius * (1 - cosf(currentSpeed * netTime)), -1};
+        *targetPos = (Vector3f){radius * sinf(currentSpeed * netTime), radius * (1 - cosf(currentSpeed * netTime)), -targetAltitude};
     #elif (REAL_OR_SITL) // Real 
-        *targetPos = (Vector3f){radius * sinf(currentSpeed * netTime), radius * (-cosf(currentSpeed * netTime)), -1};
+        *targetPos = (Vector3f){radius * sinf(currentSpeed * netTime), radius * (-cosf(currentSpeed * netTime)), -targetAltitude};
     #endif
 
     *targetVel = (Vector3f){radius * currentSpeed * cosf(currentSpeed * netTime), radius * currentSpeed * sinf(currentSpeed * netTime), 0};
@@ -236,6 +249,8 @@ void ACRL_trajectory_circle_fixed_yaw(float timeInThisRun,
 void ACRL_trajectory_figure8_fixed_yaw(float timeInThisRun,
                                        float radiusX,
                                        float radiusY,
+                                       float targetAltitude,
+                                       float initialTimeOffset,
                                        float targetSpeed,
                                        Vector3f *targetPos,
                                        Vector3f *targetVel,
@@ -262,7 +277,7 @@ void ACRL_trajectory_figure8_fixed_yaw(float timeInThisRun,
     {
         currentRate = 0.5;                  // initialize as 0.5 m/s
         currentEqvRate = currentRate / scaleFactor;
-        timeOffset = 2;                   // initial time after takeoff
+        timeOffset = initialTimeOffset;  // runtime-configured end of takeoff
         currentLoopTime = 3.14 / currentEqvRate; // time to complete one circle under current speed: 2 * pi * radius / currentRate
         gcs().send_text(MAV_SEVERITY_INFO, "Acceleration initiated.");
         gcs().send_text(MAV_SEVERITY_INFO, "Starting %f m/s (complete in %f s)", currentRate, currentLoopTime);
@@ -306,7 +321,7 @@ void ACRL_trajectory_figure8_fixed_yaw(float timeInThisRun,
 
     if (positiveLoop)
     {
-        *targetPos = (Vector3f){radiusX * sf, radiusY * s2f, -1};
+        *targetPos = (Vector3f){radiusX * sf, radiusY * s2f, -targetAltitude};
 
         *targetVel = (Vector3f){radiusX * currentEqvRate * cf, radiusY * 2 * currentEqvRate * c2f, 0};
 
@@ -318,7 +333,7 @@ void ACRL_trajectory_figure8_fixed_yaw(float timeInThisRun,
     }
     else
     {   
-        *targetPos = (Vector3f){-radiusX * sf, radiusY * s2f, -1};
+        *targetPos = (Vector3f){-radiusX * sf, radiusY * s2f, -targetAltitude};
 
         *targetVel = (Vector3f){-radiusX * currentEqvRate * cf, radiusY * 2 * currentEqvRate * c2f, 0};
 
@@ -337,6 +352,8 @@ void ACRL_trajectory_figure8_fixed_yaw(float timeInThisRun,
 void ACRL_trajectory_figure8_tilted(float timeInThisRun,
                                        float radiusX,
                                        float radiusY,
+                                       float targetAltitude,
+                                       float initialTimeOffset,
                                        float targetSpeed,
                                        Vector3f *targetPos,
                                        Vector3f *targetVel,
@@ -364,7 +381,7 @@ void ACRL_trajectory_figure8_tilted(float timeInThisRun,
     {
         currentRate = 0.5;                  // initialize as 0.5 m/s
         currentEqvRate = currentRate / scaleFactor;
-        timeOffset = 2;                   // initial time after takeoff
+        timeOffset = initialTimeOffset;  // runtime-configured end of takeoff
         currentLoopTime = 3.14 / currentEqvRate; // time to complete one circle under current speed: 2 * pi * radius / currentRate
         gcs().send_text(MAV_SEVERITY_INFO, "Acceleration initiated.");
         gcs().send_text(MAV_SEVERITY_INFO, "Starting %f m/s (complete in %f s)", currentRate, currentLoopTime);
@@ -408,7 +425,7 @@ void ACRL_trajectory_figure8_tilted(float timeInThisRun,
 
     if (positiveLoop)
     {
-        *targetPos = (Vector3f){radiusX * sf, radiusY * s2f, -1 - z_amp * sf};
+        *targetPos = (Vector3f){radiusX * sf, radiusY * s2f, -targetAltitude - z_amp * sf};
 
         *targetVel = (Vector3f){radiusX * currentEqvRate * cf, radiusY * 2 * currentEqvRate * c2f, -z_amp * currentEqvRate * cf};
 
@@ -420,7 +437,7 @@ void ACRL_trajectory_figure8_tilted(float timeInThisRun,
     }
     else
     {
-        *targetPos = (Vector3f){-radiusX * sf, radiusY * s2f, -1 + z_amp * sf};
+        *targetPos = (Vector3f){-radiusX * sf, radiusY * s2f, -targetAltitude + z_amp * sf};
 
         *targetVel = (Vector3f){-radiusX * currentEqvRate * cf, radiusY * 2 * currentEqvRate * c2f, z_amp * currentEqvRate * cf};
 
