@@ -21,6 +21,121 @@ namespace {
 constexpr float MODE29_ENTRY_MAX_XY_M = 0.50f;
 constexpr float MODE29_ENTRY_MAX_Z_M = 0.50f;
 
+#if REAL_OR_SITL
+// Softdrone single-motor static model refit from the two 2026-09-26
+// staircase datasets (1405 motor, 3-inch prop, 30 A ESC, 50 Hz PWM).
+//
+// Command variable:
+//     w = (PWM_us - 1000) / 10
+//
+// The previous quadratic model was exactly the least-squares quadratic fit
+// through the same data.  The dead-zone cubic below reduces fit error while
+// preserving F(0)=M(0)=0 and monotonicity across the validated 1050..1800 us
+// range.
+//
+// xF = max(0, w - SOFTDRONE_F_W_DEAD)
+// F  = F_C3*xF^3 + F_C2*xF^2 + F_C1*xF      [N]
+//
+// xM = max(0, w - SOFTDRONE_M_W_DEAD)
+// M  = M_C3*xM^3 + M_C2*xM^2 + M_C1*xM      [N*m]
+constexpr float SOFTDRONE_F_W_DEAD = 4.75f;
+constexpr float SOFTDRONE_F_C3 = -7.02276361e-06f;
+constexpr float SOFTDRONE_F_C2 =  1.65815719e-03f;
+constexpr float SOFTDRONE_F_C1 =  7.27527105e-05f;
+
+constexpr float SOFTDRONE_M_W_DEAD = 6.20f;
+constexpr float SOFTDRONE_M_C3 = -6.18352630e-08f;
+constexpr float SOFTDRONE_M_C2 =  1.56009927e-05f;
+constexpr float SOFTDRONE_M_C1 =  3.50634715e-04f;
+
+float softdrone_poly_eval(float w,
+                          float w_dead,
+                          float c3,
+                          float c2,
+                          float c1)
+{
+    const float x = MAX(0.0f, w - w_dead);
+    return MAX(0.0f, ((c3 * x + c2) * x + c1) * x);
+}
+
+float softdrone_poly_slope(float w,
+                           float w_dead,
+                           float c3,
+                           float c2,
+                           float c1)
+{
+    // Use the right-hand slope at the dead-zone boundary so the local
+    // allocator remains non-singular even if a motor command is very small.
+    const float x = MAX(0.0f, w - w_dead);
+    return MAX(1.0e-6f, (3.0f * c3 * x + 2.0f * c2) * x + c1);
+}
+
+float softdrone_thrust_from_w(float w)
+{
+    return softdrone_poly_eval(w,
+                               SOFTDRONE_F_W_DEAD,
+                               SOFTDRONE_F_C3,
+                               SOFTDRONE_F_C2,
+                               SOFTDRONE_F_C1);
+}
+
+float softdrone_thrust_slope_from_w(float w)
+{
+    return softdrone_poly_slope(w,
+                                SOFTDRONE_F_W_DEAD,
+                                SOFTDRONE_F_C3,
+                                SOFTDRONE_F_C2,
+                                SOFTDRONE_F_C1);
+}
+
+float softdrone_moment_from_w(float w)
+{
+    return softdrone_poly_eval(w,
+                               SOFTDRONE_M_W_DEAD,
+                               SOFTDRONE_M_C3,
+                               SOFTDRONE_M_C2,
+                               SOFTDRONE_M_C1);
+}
+
+float softdrone_moment_slope_from_w(float w)
+{
+    return softdrone_poly_slope(w,
+                                SOFTDRONE_M_W_DEAD,
+                                SOFTDRONE_M_C3,
+                                SOFTDRONE_M_C2,
+                                SOFTDRONE_M_C1);
+}
+
+float softdrone_w_from_thrust(float thrust_n)
+{
+    if (!isfinite(thrust_n) || thrust_n <= 0.0f) {
+        return 0.0f;
+    }
+
+    // The thrust stand was validated through w~=80 (1800 us), but Mode29's
+    // actuator range is 0..100.  Continue the monotonic polynomial up to the
+    // normal actuator limit while never asking the inverse to leave that range.
+    float lo = SOFTDRONE_F_W_DEAD;
+    float hi = 100.0f;
+
+    if (thrust_n >= softdrone_thrust_from_w(hi)) {
+        return hi;
+    }
+
+    // Deterministic bisection avoids fragile closed-form cubic roots and is
+    // cheap relative to the rest of the Mode29 geometric controller.
+    for (uint8_t i = 0; i < 24; i++) {
+        const float mid = 0.5f * (lo + hi);
+        if (softdrone_thrust_from_w(mid) < thrust_n) {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    return 0.5f * (lo + hi);
+}
+#endif
+
 bool mode29_finite(const Vector2f &v)
 {
     return isfinite(v.x) && isfinite(v.y);
@@ -657,19 +772,20 @@ void ModeAdaptive::run()
         const uint8_t motor_index = motor_degradation_motor_id - 1;
         const float effectiveness = 1.0f - motor_degradation_loss_pct * 0.01f;
 
+        const float w_nom = motorPWMCommanded[motor_index];
 #if (!REAL_OR_SITL)
         const float deg_a_F = 0.0014597f;
         const float deg_b_F = 0.043693f;
-#elif (REAL_OR_SITL)
-        const float deg_a_F = 0.000968094f;
-        const float deg_b_F = 0.004763730f;
-#endif
-        const float w_nom = motorPWMCommanded[motor_index];
         const float thrust_nom = deg_a_F * w_nom * w_nom + deg_b_F * w_nom;
         const float thrust_applied = MAX(0.0f, effectiveness * thrust_nom);
         const float disc = deg_b_F * deg_b_F + 4.0f * deg_a_F * thrust_applied;
         motorPWM[motor_index] =
             (-deg_b_F + sqrtF(MAX(0.0f, disc))) / (2.0f * deg_a_F);
+#elif (REAL_OR_SITL)
+        const float thrust_nom = softdrone_thrust_from_w(w_nom);
+        const float thrust_applied = MAX(0.0f, effectiveness * thrust_nom);
+        motorPWM[motor_index] = softdrone_w_from_thrust(thrust_applied);
+#endif
         motorPWM[motor_index] = constrain_float(motorPWM[motor_index], 0.0f, 100.0f);
     }
 
@@ -1239,8 +1355,6 @@ VectorN<float, 4> ModeAdaptive::motorMixingYawFree(VectorN<float, 4> thrustMomen
 #elif (REAL_OR_SITL)
     const float L = 0.28f;
     const float D = 0.28f;
-    const float a_F = 0.000968094f;
-    const float b_F = 0.004763730f;
 #endif
 
     const float F = thrustMomentCmd[0];
@@ -1261,8 +1375,12 @@ VectorN<float, 4> ModeAdaptive::motorMixingYawFree(VectorN<float, 4> thrustMomen
     VectorN<float, 4> w;
     for (uint8_t i = 0; i < 4; i++) {
         const float fi = MAX(0.0f, motorThrust[i]);
+#if (!REAL_OR_SITL)
         const float disc = b_F * b_F + 4.0f * a_F * fi;
         w[i] = (-b_F + sqrtF(MAX(0.0f, disc))) / (2.0f * a_F);
+#elif (REAL_OR_SITL)
+        w[i] = softdrone_w_from_thrust(fi);
+#endif
     }
 
     return w;
@@ -1286,17 +1404,10 @@ VectorN<float, 4> ModeAdaptive::motorMixing(VectorN<float, 4> thrustMomentCmd)
     const float L = 0.28f;
     const float D = 0.28f;
 
-    // Static motor/propeller fits from the softdrone thrust-stand dataset.
-    // w is the same command variable used by this mixer:
-    //     w = (PWM_us - 1000) / 10
-    // Validated fit range: approximately 1050..1800 us.
-    // Thrust is in N and reaction torque is in N*m.
-    //     F(w) = a_F*w^2 + b_F*w
-    //     M(w) = a_M*w^2 + b_M*w
-    const float a_F = 0.000968094f;
-    const float b_F = 0.004763730f;
-    const float a_M = 0.0000107130307f;
-    const float b_M = 0.000243044484f;
+    // Static motor/propeller model is the dead-zone cubic defined at the top
+    // of this file.  It is shared by normal allocation, yaw-free allocation,
+    // and motor-degradation effectiveness injection so all three paths use
+    // one internally consistent physical model.
 
     // Softdrone motor/output order expected by the mixer:
     //   w[0] / output 1: front-right, CCW
@@ -1305,39 +1416,41 @@ VectorN<float, 4> ModeAdaptive::motorMixing(VectorN<float, 4> thrustMomentCmd)
     //   w[3] / output 4: rear-right,  CW
 #endif
 
-    // solve for linearizing point
+    // Solve for a common-motor linearizing point at one quarter of the total
+    // collective thrust, then take two Newton-style allocator refinements.
+#if (!REAL_OR_SITL)
     float w0 = (-b_F + sqrtF(b_F * b_F + a_F * thrustMomentCmd[0])) / 2 / a_F;
+    float d_F = 2 * a_F * w0 + b_F;
+    float d_M = 2 * a_M * w0 + b_M;
+    const float offset_F = -a_F * w0 * w0;
+#elif (REAL_OR_SITL)
+    float w0 = softdrone_w_from_thrust(MAX(0.0f, 0.25f * thrustMomentCmd[0]));
+    float d_F = softdrone_thrust_slope_from_w(w0);
+    float d_M = softdrone_moment_slope_from_w(w0);
+    const float offset_F = softdrone_thrust_from_w(w0) - d_F * w0;
+#endif
 
-    float c_F = 2 * a_F * w0 + b_F;
-    float c_M = 2 * a_M * w0 + b_M;
+    const float thrust_biased = thrustMomentCmd[0] - 4.0f * offset_F;
+    const float M1 = thrustMomentCmd[1];
+    const float M2 = thrustMomentCmd[2];
+    const float M3 = thrustMomentCmd[3];
 
-    float thrust_biased = 2 * thrustMomentCmd[0] - 4 * b_F * w0;
-    float M1 = thrustMomentCmd[1];
-    float M2 = thrustMomentCmd[2];
-    float M3 = thrustMomentCmd[3];
+    // Motor mixing for x layout using the local slopes of F(w) and M(w).
+    const float d_F4_inv = 1.0f / (4.0f * d_F);
+    const float d_FL_inv = 1.0f / (2.0f * L * d_F);
+    const float d_FD_inv = 1.0f / (2.0f * D * d_F);
+    const float d_M4_inv = 1.0f / (4.0f * d_M);
 
-    // motor mixing for x layout
-    const float c_F4_inv = 1 / (4 * c_F);
-    const float c_FL_inv = 1 / (2 * L * c_F);
-    const float c_FD_inv = 1 / (2 * D * c_F);
-    const float c_M4_inv = 1 / (4 * c_M);
+    w[0] = d_F4_inv * thrust_biased - d_FL_inv * M1 + d_FD_inv * M2 + d_M4_inv * M3;
+    w[1] = d_F4_inv * thrust_biased + d_FL_inv * M1 - d_FD_inv * M2 + d_M4_inv * M3;
+    w[2] = d_F4_inv * thrust_biased + d_FL_inv * M1 + d_FD_inv * M2 - d_M4_inv * M3;
+    w[3] = d_F4_inv * thrust_biased - d_FL_inv * M1 - d_FD_inv * M2 - d_M4_inv * M3;
 
-    w[0] = c_F4_inv * thrust_biased - c_FL_inv * M1 + c_FD_inv * M2 + c_M4_inv * M3;
-    w[1] = c_F4_inv * thrust_biased + c_FL_inv * M1 - c_FD_inv * M2 + c_M4_inv * M3;
-    w[2] = c_F4_inv * thrust_biased + c_FL_inv * M1 + c_FD_inv * M2 - c_M4_inv * M3;
-    w[3] = c_F4_inv * thrust_biased - c_FL_inv * M1 - c_FD_inv * M2 - c_M4_inv * M3;
-
-    // 2nd shot on solving for motor speed
-    // output: VectorN<float, 4> new motor speed
-    // input: a_F, b_F, a_M, b_M, w, L, D, thrustMomentCmd
-
-    // motor speed after the second iteration
     VectorN<float, 4> w2;
-    w2 = iterativeMotorMixing(w, thrustMomentCmd, a_F, b_F, a_M, b_M, L, D);
+    w2 = iterativeMotorMixing(w, thrustMomentCmd, L, D);
 
-    // motor speed after the third iteration
     VectorN<float, 4> w3;
-    w3 = iterativeMotorMixing(w2, thrustMomentCmd, a_F, b_F, a_M, b_M, L, D);
+    w3 = iterativeMotorMixing(w2, thrustMomentCmd, L, D);
 
     // logging
     // AP::logger().Write("L1A1", "m1,m2,m3,m4", "ffff",
@@ -1358,48 +1471,81 @@ VectorN<float, 4> ModeAdaptive::motorMixing(VectorN<float, 4> thrustMomentCmd)
     return w3;
 }
 
-VectorN<float, 4> ModeAdaptive::iterativeMotorMixing(VectorN<float, 4> w_input, VectorN<float, 4> thrustMomentCmd, float a_F, float b_F, float a_M, float b_M, float L, float D)
+VectorN<float, 4> ModeAdaptive::iterativeMotorMixing(VectorN<float, 4> w_input,
+                                                      VectorN<float, 4> thrustMomentCmd,
+                                                      float L,
+                                                      float D)
 {
-    // The function iterativeMotorMixing computes the motor speed to achieve the desired thrustMoment command
-    // input:
-    // VectorN<float, 4> w_input -- initial guess of the motor speed (linearizing point)
-    // VectorN<float, 4> thrustMomentCmd -- desired thrust and moment command
-    // float a_F -- 2nd-order coefficient for motor's thrust-speed curve
-    // float b_F -- 1st-order coefficient for motor's thrust-speed curve
-    // float a_M -- 2nd-order coefficient for motor's torque-speed curve
-    // float b_M -- 1st-order coefficient for motor's torque-speed curve
-    // float L -- longer distance between adjacent motors
-    // float D -- shorter distance between adjacent motors
+    // One local Newton-style allocation step.  Each motor's nonlinear thrust
+    // and reaction-torque curve is linearized independently about w_input.
+    VectorN<float, 4> w_new;
 
-    // output:
-    // VectorN<float, 4> w_new new motor speed
+    float c_F1, c_F2, c_F3, c_F4;
+    float c_M1, c_M2, c_M3, c_M4;
+    float d_F1, d_F2, d_F3, d_F4;
+    float d_M1, d_M2, d_M3, d_M4;
 
-    VectorN<float, 4> w_new; // new motor speed
+#if (!REAL_OR_SITL)
+    const float a_F = 0.0014597f;
+    const float b_F = 0.043693f;
+    const float a_M = 0.000011667f;
+    const float b_M = 0.0059137f;
 
-    float w1_square = w_input[0] * w_input[0];
-    float w2_square = w_input[1] * w_input[1];
-    float w3_square = w_input[2] * w_input[2];
-    float w4_square = w_input[3] * w_input[3];
+    const float w1_square = w_input[0] * w_input[0];
+    const float w2_square = w_input[1] * w_input[1];
+    const float w3_square = w_input[2] * w_input[2];
+    const float w4_square = w_input[3] * w_input[3];
 
-    float c_F1 = -a_F * w1_square;
-    float c_F2 = -a_F * w2_square;
-    float c_F3 = -a_F * w3_square;
-    float c_F4 = -a_F * w4_square;
+    c_F1 = -a_F * w1_square;
+    c_F2 = -a_F * w2_square;
+    c_F3 = -a_F * w3_square;
+    c_F4 = -a_F * w4_square;
 
-    float c_M1 = -a_M * w1_square;
-    float c_M2 = -a_M * w2_square;
-    float c_M3 = -a_M * w3_square;
-    float c_M4 = -a_M * w4_square;
+    c_M1 = -a_M * w1_square;
+    c_M2 = -a_M * w2_square;
+    c_M3 = -a_M * w3_square;
+    c_M4 = -a_M * w4_square;
 
-    float d_F1 = 2 * a_F * w_input[0] + b_F;
-    float d_F2 = 2 * a_F * w_input[1] + b_F;
-    float d_F3 = 2 * a_F * w_input[2] + b_F;
-    float d_F4 = 2 * a_F * w_input[3] + b_F;
+    d_F1 = 2.0f * a_F * w_input[0] + b_F;
+    d_F2 = 2.0f * a_F * w_input[1] + b_F;
+    d_F3 = 2.0f * a_F * w_input[2] + b_F;
+    d_F4 = 2.0f * a_F * w_input[3] + b_F;
 
-    float d_M1 = 2 * a_M * w_input[0] + b_M;
-    float d_M2 = 2 * a_M * w_input[1] + b_M;
-    float d_M3 = 2 * a_M * w_input[2] + b_M;
-    float d_M4 = 2 * a_M * w_input[3] + b_M;
+    d_M1 = 2.0f * a_M * w_input[0] + b_M;
+    d_M2 = 2.0f * a_M * w_input[1] + b_M;
+    d_M3 = 2.0f * a_M * w_input[2] + b_M;
+    d_M4 = 2.0f * a_M * w_input[3] + b_M;
+#elif (REAL_OR_SITL)
+    const float F1 = softdrone_thrust_from_w(w_input[0]);
+    const float F2 = softdrone_thrust_from_w(w_input[1]);
+    const float F3 = softdrone_thrust_from_w(w_input[2]);
+    const float F4 = softdrone_thrust_from_w(w_input[3]);
+
+    d_F1 = softdrone_thrust_slope_from_w(w_input[0]);
+    d_F2 = softdrone_thrust_slope_from_w(w_input[1]);
+    d_F3 = softdrone_thrust_slope_from_w(w_input[2]);
+    d_F4 = softdrone_thrust_slope_from_w(w_input[3]);
+
+    c_F1 = F1 - d_F1 * w_input[0];
+    c_F2 = F2 - d_F2 * w_input[1];
+    c_F3 = F3 - d_F3 * w_input[2];
+    c_F4 = F4 - d_F4 * w_input[3];
+
+    const float M1 = softdrone_moment_from_w(w_input[0]);
+    const float M2 = softdrone_moment_from_w(w_input[1]);
+    const float M3 = softdrone_moment_from_w(w_input[2]);
+    const float M4 = softdrone_moment_from_w(w_input[3]);
+
+    d_M1 = softdrone_moment_slope_from_w(w_input[0]);
+    d_M2 = softdrone_moment_slope_from_w(w_input[1]);
+    d_M3 = softdrone_moment_slope_from_w(w_input[2]);
+    d_M4 = softdrone_moment_slope_from_w(w_input[3]);
+
+    c_M1 = M1 - d_M1 * w_input[0];
+    c_M2 = M2 - d_M2 * w_input[1];
+    c_M3 = M3 - d_M3 * w_input[2];
+    c_M4 = M4 - d_M4 * w_input[3];
+#endif
 
     VectorN<float, 4> coefficientRow1;
     VectorN<float, 4> coefficientRow2;

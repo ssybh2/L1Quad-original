@@ -2031,6 +2031,9 @@ private:
     Vector3f veeOperator(Matrix3f input);
     VectorN<float,4> motorMixingYawFree(VectorN<float,4> thrustMomentCmd);
     VectorN<float,4> motorMixing(VectorN<float,4> thrustMomentCmd);
-    VectorN<float,4> iterativeMotorMixing(VectorN<float, 4> w_input, VectorN<float, 4> thrustMomentCmd, float a_F, float b_F, float a_M, float b_M, float L, float D);
+    VectorN<float,4> iterativeMotorMixing(VectorN<float, 4> w_input,
+                                           VectorN<float, 4> thrustMomentCmd,
+                                           float L,
+                                           float D);
     VectorN<float,16> mat4Inv(VectorN<float,4> coefficientRow1, VectorN<float,4> coefficientRow2, VectorN<float,4> coefficientRow3, VectorN<float,4> coefficientRow4);
 };
