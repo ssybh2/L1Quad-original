@@ -289,6 +289,13 @@
  #define M29_SETTLE_T_DEFAULT        1.5f
 #endif
 
+// Maximum commanded combined roll/pitch tilt for Mode29. The geometric
+// controller projects its desired thrust vector into this upright cone so it
+// can never command an inverted attitude. Runtime tuning is via M29_MAX_TILT.
+#ifndef M29_MAX_TILT_DEFAULT
+ #define M29_MAX_TILT_DEFAULT       30.0f
+#endif
+
 #if !REAL_OR_SITL
 // default ACRL controller parameters (SITL)
 #ifndef GEOCTRL_KPX_DEFAULT

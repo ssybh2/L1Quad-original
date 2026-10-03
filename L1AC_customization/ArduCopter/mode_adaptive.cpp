@@ -137,6 +137,7 @@ bool ModeAdaptive::init(bool ignore_checks)
     const float configured_takeoff_alt = (float)g.m29_takeoff_alt;
     const float configured_takeoff_time = (float)g.m29_takeoff_time;
     const float configured_settle_time = (float)g.m29_settle_time;
+    const float configured_max_tilt = (float)g.m29_max_tilt;
 
     if (!isfinite(configured_takeoff_alt) ||
         configured_takeoff_alt < 0.2f ||
@@ -162,12 +163,21 @@ bool ModeAdaptive::init(bool ignore_checks)
         return false;
     }
 
+    if (!isfinite(configured_max_tilt) ||
+        configured_max_tilt < 5.0f ||
+        configured_max_tilt > 60.0f) {
+        GCS_SEND_TEXT(MAV_SEVERITY_CRITICAL,
+                      "Mode29 rejected: M29_MAX_TILT invalid");
+        return false;
+    }
+
     // Freeze the trajectory configuration for this Mode29 run. The Orange Pi
     // tool only writes these values while DISARMED, so a flight cannot change
     // its reference trajectory halfway through the run.
     takeoffAlt = configured_takeoff_alt;
     takeoffTime = configured_takeoff_time;
     settleTime = configured_settle_time;
+    maxTiltDeg = configured_max_tilt;
 
     motorEnable = 1;
 
@@ -177,10 +187,11 @@ bool ModeAdaptive::init(bool ignore_checks)
                   (double)entry_position.z,
                   (int)g.l1enable);
     GCS_SEND_TEXT(MAV_SEVERITY_INFO,
-                  "Mode29 takeoff: H=%.2fm T=%.2fs settle=%.2fs",
+                  "Mode29 takeoff: H=%.2fm T=%.2fs settle=%.2fs tilt=%.1fdeg",
                   (double)takeoffAlt,
                   (double)takeoffTime,
-                  (double)settleTime);
+                  (double)settleTime,
+                  (double)maxTiltDeg);
     return true;
 }
 
@@ -780,6 +791,47 @@ VectorN<float, 4> ModeAdaptive::geometricController(Vector3f targetPos,
     target_force.y = kg_vehicleMass * targetAcc.y - g.GeoCtrl_Kpy * r_error.y - g.GeoCtrl_Kvy * v_error.y;
     target_force.z = kg_vehicleMass * (targetAcc.z - GRAVITY_MAGNITUDE) - g.GeoCtrl_Kpz * r_error.z - g.GeoCtrl_Kvz * v_error.z;
 
+    // Safety-project the desired thrust vector into an upright cone.
+    //
+    // In NED, a normal upright vehicle has body +Z pointing down and thrust
+    // acts along -body-Z. Therefore -target_force is the desired body +Z
+    // direction. Without this guard, a large altitude overshoot can make the
+    // raw target_force point downward, which asks the geometric controller to
+    // rotate the aircraft through 90 deg and eventually fly inverted.
+    //
+    // The projection does two things:
+    //   1. keeps a small positive upright component so inverted thrust is
+    //      never requested; gravity can still provide downward acceleration;
+    //   2. limits the horizontal/vertical ratio to tan(M29_MAX_TILT), which
+    //      bounds the combined commanded roll/pitch tilt.
+    bool thrust_vector_limited = false;
+    Vector3f desired_body_z_force = -target_force;
+    const float min_upright_force =
+        0.05f * kg_vehicleMass * GRAVITY_MAGNITUDE;
+
+    if (desired_body_z_force.z < min_upright_force) {
+        desired_body_z_force.z = min_upright_force;
+        thrust_vector_limited = true;
+    }
+
+    const float max_tilt_rad = maxTiltDeg * DEG_TO_RAD;
+    const float horizontal_force =
+        sqrtF(desired_body_z_force.x * desired_body_z_force.x +
+              desired_body_z_force.y * desired_body_z_force.y);
+    const float max_horizontal_force =
+        desired_body_z_force.z * tanf(max_tilt_rad);
+
+    if (horizontal_force > max_horizontal_force &&
+        horizontal_force > 1.0e-6f) {
+        const float horizontal_scale =
+            max_horizontal_force / horizontal_force;
+        desired_body_z_force.x *= horizontal_scale;
+        desired_body_z_force.y *= horizontal_scale;
+        thrust_vector_limited = true;
+    }
+
+    target_force = -desired_body_z_force;
+
     // Z-Axis [zB]
     Quaternion q;
     ahrs.get_quat_body_to_ned(q);
@@ -830,6 +882,14 @@ VectorN<float, 4> ModeAdaptive::geometricController(Vector3f targetPos,
     target_force_dot.y = -g.GeoCtrl_Kpy * v_error.y - g.GeoCtrl_Kvy * a_error.y + kg_vehicleMass * targetJerk.y;
     target_force_dot.z = -g.GeoCtrl_Kpz * v_error.z - g.GeoCtrl_Kvz * a_error.z + kg_vehicleMass * targetJerk.z;
 
+    // Once the safety projection is active, the analytical derivative of the
+    // unconstrained force no longer represents the constrained command.
+    // Zeroing its feed-forward derivatives avoids injecting a spurious desired
+    // angular-rate command while the safety limiter is protecting the vehicle.
+    if (thrust_vector_limited) {
+        target_force_dot = (Vector3f){0, 0, 0};
+    }
+
     Vector3f b3_dot = R * hatOperator(Omega) * e3;
 
     float target_thrust_dot = -target_force_dot * R.colz() - target_force * b3_dot;
@@ -841,6 +901,10 @@ VectorN<float, 4> ModeAdaptive::geometricController(Vector3f targetPos,
     target_force_ddot.x = -g.GeoCtrl_Kpx * a_error.x - g.GeoCtrl_Kvx * j_error.x + kg_vehicleMass * targetSnap.x;
     target_force_ddot.y = -g.GeoCtrl_Kpy * a_error.y - g.GeoCtrl_Kvy * j_error.y + kg_vehicleMass * targetSnap.y;
     target_force_ddot.z = -g.GeoCtrl_Kpz * a_error.z - g.GeoCtrl_Kvz * j_error.z + kg_vehicleMass * targetSnap.z;
+
+    if (thrust_vector_limited) {
+        target_force_ddot = (Vector3f){0, 0, 0};
+    }
 
     VectorN<float, 9> b3cCollection;                                                // collection of three three-dimensional vectors b3c, b3c_dot, b3c_ddot
     b3cCollection = unit_vec(-target_force, -target_force_dot, -target_force_ddot); // unit_vec function is from geometric controller's git repo: https://github.com/fdcl-gwu/uav_geometric_control/blob/master/matlab/aux_functions/deriv_unit_vector.m

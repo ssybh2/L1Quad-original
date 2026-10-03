@@ -421,6 +421,7 @@ public:
         k_param_m29_takeoff_alt = 281,  // takeoff/hover altitude above NED origin
         k_param_m29_takeoff_time,       // smooth takeoff duration
         k_param_m29_settle_time = 283,  // settle time before fault injection
+        k_param_m29_max_tilt = 284,     // maximum combined roll/pitch tilt
 
         // the k_param_* space is 9-bits in size
         // 511: reserved
@@ -533,6 +534,7 @@ public:
     AP_Float m29_takeoff_alt;  // altitude above NED origin, m (target z = -altitude)
     AP_Float m29_takeoff_time; // takeoff duration, s
     AP_Float m29_settle_time;  // wait after takeoff before fault injection, s
+    AP_Float m29_max_tilt;     // maximum commanded combined roll/pitch tilt, deg
 
 #if MODE_THROW_ENABLED == ENABLED
     AP_Enum<ModeThrow::PreThrowMotorState>         throw_motor_start;

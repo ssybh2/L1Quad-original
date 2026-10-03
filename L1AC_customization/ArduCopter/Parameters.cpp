@@ -639,6 +639,15 @@ const AP_Param::Info Copter::var_info[] = {
     // @Increment: 0.1
     // @User: Advanced
     GSCALAR(m29_settle_time, "M29_SETTLE_T", M29_SETTLE_T_DEFAULT),
+
+    // @Param: M29_MAX_TILT
+    // @DisplayName: Mode29 maximum tilt
+    // @Description: Maximum combined roll/pitch tilt commanded by the Mode29 geometric controller. The desired thrust vector is constrained to an upright cone, preventing Mode29 from commanding inverted flight.
+    // @Units: deg
+    // @Range: 5 60
+    // @Increment: 1
+    // @User: Advanced
+    GSCALAR(m29_max_tilt, "M29_MAX_TILT", M29_MAX_TILT_DEFAULT),
 #endif
 
     // ACRO_RP_EXPO moved to Command Model class

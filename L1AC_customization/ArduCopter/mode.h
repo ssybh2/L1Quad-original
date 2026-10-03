@@ -1994,6 +1994,7 @@ public:
     float takeoffAlt;  // Mode29 takeoff/hover altitude above NED origin, m
     float takeoffTime; // Mode29 smooth takeoff duration, s
     float settleTime;  // post-takeoff settle time before fault injection, s
+    float maxTiltDeg;  // maximum commanded combined roll/pitch tilt, deg
 
     // the variables below are defined for the landing procedure
     uint8_t landingTriggered; // indicator of whether a landing command has been triggered (via setting g2.landingFlag to 1)
