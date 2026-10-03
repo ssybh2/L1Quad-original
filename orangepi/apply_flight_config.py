@@ -56,6 +56,7 @@ MODE29_PARAMS = {
     "M29_TKOFF_ALT",
     "M29_TKOFF_T",
     "M29_SETTLE_T",
+    "M29_MAX_TILT",
 }
 
 ARDUCOPTER_ATTITUDE_PARAMS = {
@@ -165,6 +166,8 @@ def load_profile(path):
         raise ValueError("M29_TKOFF_T must be in [1.0, 15.0] s")
     if "M29_SETTLE_T" in requested and not (0.0 <= requested["M29_SETTLE_T"] <= 15.0):
         raise ValueError("M29_SETTLE_T must be in [0.0, 15.0] s")
+    if "M29_MAX_TILT" in requested and not (5.0 <= requested["M29_MAX_TILT"] <= 60.0):
+        raise ValueError("M29_MAX_TILT must be in [5.0, 60.0] deg")
 
     return document, requested
 

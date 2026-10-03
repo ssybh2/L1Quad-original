@@ -22,13 +22,13 @@ parameters:
     ATC_ANG_YAW_P: 4.5
 
   rate_roll:
-    ATC_RAT_RLL_P: 0.135
+    ATC_RAT_RLL_P: 0.045
     ATC_RAT_RLL_I: 0.135
     ATC_RAT_RLL_D: 0.0036
     ATC_RAT_RLL_FF: 0.0
 
   rate_pitch:
-    ATC_RAT_PIT_P: 0.135
+    ATC_RAT_PIT_P: 0.045
     ATC_RAT_PIT_I: 0.135
     ATC_RAT_PIT_D: 0.0036
     ATC_RAT_PIT_FF: 0.0
