@@ -22,31 +22,32 @@ constexpr float MODE29_ENTRY_MAX_XY_M = 0.50f;
 constexpr float MODE29_ENTRY_MAX_Z_M = 0.50f;
 
 #if REAL_OR_SITL
-// Softdrone single-motor static model refit from the two 2026-09-26
+// Softdrone single-motor 6S static model refit from the two valid 2026-10-03
 // staircase datasets (1405 motor, 3-inch prop, 30 A ESC, 50 Hz PWM).
 //
-// Command variable:
+// Measured pack voltage across the fitted sweeps: 21.95..24.69 V
+// (mean 23.77 V). Command variable:
 //     w = (PWM_us - 1000) / 10
 //
-// The previous quadratic model was exactly the least-squares quadratic fit
-// through the same data.  The dead-zone cubic below reduces fit error while
-// preserving F(0)=M(0)=0 and monotonicity across the validated 1050..1800 us
-// range.
+// The dead-zone cubic preserves F(0)=M(0)=0 and remains monotonic throughout
+// Mode29's 0..100 command range. The thrust fit retains the near-zero samples
+// to identify the ESC/motor onset. For reaction torque, the physically invalid
+// zero-RPM torque-offset sample from one repeat is excluded from the fit.
 //
 // xF = max(0, w - SOFTDRONE_F_W_DEAD)
 // F  = F_C3*xF^3 + F_C2*xF^2 + F_C1*xF      [N]
 //
 // xM = max(0, w - SOFTDRONE_M_W_DEAD)
 // M  = M_C3*xM^3 + M_C2*xM^2 + M_C1*xM      [N*m]
-constexpr float SOFTDRONE_F_W_DEAD = 4.75f;
-constexpr float SOFTDRONE_F_C3 = -7.02276361e-06f;
-constexpr float SOFTDRONE_F_C2 =  1.65815719e-03f;
-constexpr float SOFTDRONE_F_C1 =  7.27527105e-05f;
+constexpr float SOFTDRONE_F_W_DEAD = 4.47703190f;
+constexpr float SOFTDRONE_F_C3 = -2.62683159e-05f;
+constexpr float SOFTDRONE_F_C2 =  4.01680390e-03f;
+constexpr float SOFTDRONE_F_C1 =  4.05756758e-08f;
 
-constexpr float SOFTDRONE_M_W_DEAD = 6.20f;
-constexpr float SOFTDRONE_M_C3 = -6.18352630e-08f;
-constexpr float SOFTDRONE_M_C2 =  1.56009927e-05f;
-constexpr float SOFTDRONE_M_C1 =  3.50634715e-04f;
+constexpr float SOFTDRONE_M_W_DEAD = 6.24726216f;
+constexpr float SOFTDRONE_M_C3 = -2.50608401e-07f;
+constexpr float SOFTDRONE_M_C2 =  3.84208303e-05f;
+constexpr float SOFTDRONE_M_C1 =  5.42809055e-04f;
 
 float softdrone_poly_eval(float w,
                           float w_dead,
@@ -307,6 +308,10 @@ bool ModeAdaptive::init(bool ignore_checks)
                   (double)takeoffTime,
                   (double)settleTime,
                   (double)maxTiltDeg);
+#if REAL_OR_SITL
+    GCS_SEND_TEXT(MAV_SEVERITY_INFO,
+                  "Mode29 motor model: 6S PWM fit 2026-10-03");
+#endif
     return true;
 }
 
