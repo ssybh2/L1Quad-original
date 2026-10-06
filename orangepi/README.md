@@ -207,6 +207,25 @@ python3 orangepi/motor_derating_control.py enable \
   --keep-yaw
 ```
 
+Blind onboard-FDI experiment: the injector still applies the selected motor-loss
+ground truth, but it does **not** request yaw-free. The Mode29 detector must
+identify a severe motor fault from the L1 matched-moment estimate and switch to
+automatic yaw-free/fault-aware allocation itself:
+
+```bash
+python3 orangepi/motor_derating_control.py enable \
+  --motor 1 \
+  --loss 80 \
+  --duration 3 \
+  --blind
+```
+
+The current onboard detector is intentionally conservative: it is aimed at
+severe loss, requires a consistent motor signature for about 60 ms, and latches
+the detected motor until Mode29 exits or the vehicle disarms. DataFlash `L1FD`
+records detector state, isolated motor, candidate, confirmation count,
+estimated loss, residual score, and the three matched-moment estimates.
+
 Immediately release RC9..RC12 overrides:
 
 ```bash
