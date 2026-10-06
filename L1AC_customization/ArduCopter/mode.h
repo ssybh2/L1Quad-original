@@ -1940,7 +1940,7 @@ public:
     bool motor_degradation_command_fresh(uint32_t now_ms) const;
 
     static constexpr uint32_t MOTOR_DEG_WATCHDOG_MS = 500U;
-    static constexpr float MOTOR_DEG_MAX_LOSS_PCT = 30.0f;
+    static constexpr float MOTOR_DEG_MAX_LOSS_PCT = 100.0f;
 
     bool requires_GPS() const override { return false; }
     bool has_manual_throttle() const override { return true; }
