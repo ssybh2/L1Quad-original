@@ -39,7 +39,12 @@ def parse_args():
     en.add_argument("--loss", type=float, required=True, help="thrust-effectiveness loss percent, 0 <= loss <= 100")
     en.add_argument("--duration", type=float, default=5.0, help="seconds; 0 means until Ctrl+C")
     en.add_argument("--rate", type=float, default=10.0)
-    en.add_argument("--keep-yaw", action="store_true", help="keep fixed-yaw control instead of yaw-free mode")
+    en.add_argument("--keep-yaw", action="store_true", help="keep fixed-yaw control instead of requesting yaw-free mode")
+    en.add_argument(
+        "--blind",
+        action="store_true",
+        help="blind-FDI experiment: injector keeps yaw enabled; onboard FDI must detect the severe fault and release yaw automatically",
+    )
     en.add_argument("--wait-mode29", type=float, default=60.0, help="seconds to wait for armed Mode 29")
 
     sub.add_parser("disable")
@@ -206,12 +211,13 @@ def main():
     rc9 = 2000
     rc10 = motor_selector_pwm(args.motor)
     rc11 = loss_to_pwm(args.loss)
-    rc12 = 1000 if args.keep_yaw else 2000
+    rc12 = 1000 if (args.keep_yaw or args.blind) else 2000
     period = 1.0 / max(1.0, args.rate)
 
     print(
         f"starting: motor={args.motor} loss={args.loss:.1f}% "
-        f"yaw_free={not args.keep_yaw} duration={args.duration}s"
+        f"yaw_free_requested={not (args.keep_yaw or args.blind)} "
+        f"blind_fdi={args.blind} duration={args.duration}s"
     )
 
     stop = False
