@@ -1946,7 +1946,9 @@ public:
     // estimates and the previous nominal actuator commands; it never reads
     // the injected motor id or injected loss percentage.
     static constexpr uint16_t MOTOR_FDI_CONFIRM_SAMPLES = 24U;       // ~60 ms at 400 Hz
+    static constexpr uint16_t MOTOR_FDI_RECOVER_SAMPLES = 40U;       // ~100 ms at 400 Hz
     static constexpr float MOTOR_FDI_MIN_LOSS_FRACTION = 0.60f;
+    static constexpr float MOTOR_FDI_RELEASE_LOSS_FRACTION = 0.35f;
     static constexpr float MOTOR_FDI_MAX_RESIDUAL_RATIO = 0.35f;
     static constexpr float MOTOR_FDI_MIN_RP_MOMENT = 0.20f;          // N*m
 
@@ -2031,6 +2033,7 @@ private:
     uint8_t motor_fault_detected_id = 0;
     uint8_t motor_fault_candidate_id = 0;
     uint16_t motor_fault_confirm_count = 0;
+    uint16_t motor_fault_recovery_count = 0;
     float motor_fault_loss_estimate_pct = 0.0f;
     float motor_fault_residual_ratio = 1.0f;
     Vector3f motor_fault_sigma_filtered;
@@ -2055,8 +2058,10 @@ private:
     Matrix3f hatOperator(Vector3f input);
     Vector3f veeOperator(Matrix3f input);
     VectorN<float,4> motorMixingYawFree(VectorN<float,4> thrustMomentCmd);
-    VectorN<float,4> motorMixingYawFreeFaultAware(VectorN<float,4> thrustMomentCmd,
-                                                   uint8_t failed_motor_id);
+    VectorN<float,4> motorMixingYawFreeEffectivenessAware(
+        VectorN<float,4> thrustMomentCmd,
+        uint8_t degraded_motor_id,
+        float estimated_loss_pct);
     VectorN<float,4> motorMixing(VectorN<float,4> thrustMomentCmd);
     VectorN<float,4> iterativeMotorMixing(VectorN<float, 4> w_input,
                                            VectorN<float, 4> thrustMomentCmd,
