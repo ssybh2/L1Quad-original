@@ -2043,8 +2043,27 @@ private:
     VectorN<float, 4> motor_fault_nominal_prev;
     bool motor_fault_nominal_prev_valid = false;
 
+    // Position-loop gain scheduling. Only GEOCTRL_KP* and GEOCTRL_KV* are
+    // scheduled; attitude/rate gains and all L1 parameters remain unchanged.
+    struct PositionGainSet {
+        float kpx;
+        float kpy;
+        float kpz;
+        float kvx;
+        float kvy;
+        float kvz;
+    };
+
+    float position_gain_loss_raw_pct = 0.0f;
+    float position_gain_loss_sched_pct = 0.0f;
+    float position_gain_confidence = 0.0f;
+    PositionGainSet position_gain_active = {};
+
     void clear_auto_motor_fault();
     void update_auto_motor_fault_detector(float time_in_this_run);
+    void reset_position_gain_schedule();
+    void update_position_gain_schedule(bool motor_degradation_active);
+    PositionGainSet position_gain_at_loss(float loss_pct) const;
 
     VectorN<float, 4> geometricController(Vector3f targetPos,
                                                     Vector3f targetVel,
