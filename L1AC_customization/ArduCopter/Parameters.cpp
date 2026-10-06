@@ -650,8 +650,8 @@ const AP_Param::Info Copter::var_info[] = {
     GSCALAR(m29_max_tilt, "M29_MAX_TILT", M29_MAX_TILT_DEFAULT),
 
     // @Param: M29_GS_MODE
-    // @DisplayName: Mode29 position gain-schedule source
-    // @Description: Selects the source used to schedule only GEOCTRL position/velocity gains. 0 disables scheduling and uses GEOCTRL_KP*/KV* directly. 1 uses the injected motor-loss percentage for calibration/oracle testing. 2 uses the onboard FDI loss estimate.
+    // @DisplayName: Mode29 gain-schedule source
+    // @Description: Selects the source used to schedule GEOCTRL KP/KV/KR/KO gains and maximum tilt. 0 disables scheduling and uses normal GEOCTRL values plus M29_MAX_TILT. 1 uses the injected motor-loss percentage for calibration/oracle testing. 2 uses the onboard FDI loss estimate.
     // @Values: 0:Disabled,1:OracleInjectedLoss,2:AutomaticFDI
     // @User: Advanced
     GSCALAR(m29_gs_mode, "M29_GS_MODE", M29_GS_MODE_DEFAULT),
@@ -907,6 +907,312 @@ const AP_Param::Info Copter::var_info[] = {
     // @Range: 0 50
     // @User: Advanced
     GSCALAR(m29_g100_kvz, "M29_G100_KVZ", M29_GS_KVZ_DEFAULT),
+
+    // @Param: M29_G50_KRX
+    // @DisplayName: Mode29 50% loss KRX
+    // @Description: Attitude proportional gain about body X. Scheduled at 50% estimated motor thrust-effectiveness loss.
+    // @Range: 0 20
+    // @User: Advanced
+    GSCALAR(m29_g50_krx, "M29_G50_KRX", M29_GS_KRX_DEFAULT),
+
+    // @Param: M29_G50_KRY
+    // @DisplayName: Mode29 50% loss KRY
+    // @Description: Attitude proportional gain about body Y. Scheduled at 50% estimated motor thrust-effectiveness loss.
+    // @Range: 0 20
+    // @User: Advanced
+    GSCALAR(m29_g50_kry, "M29_G50_KRY", M29_GS_KRY_DEFAULT),
+
+    // @Param: M29_G50_KRZ
+    // @DisplayName: Mode29 50% loss KRZ
+    // @Description: Attitude proportional gain about body Z. Scheduled at 50% estimated motor thrust-effectiveness loss.
+    // @Range: 0 20
+    // @User: Advanced
+    GSCALAR(m29_g50_krz, "M29_G50_KRZ", M29_GS_KRZ_DEFAULT),
+
+    // @Param: M29_G50_KOX
+    // @DisplayName: Mode29 50% loss KOX
+    // @Description: Angular-rate feedback gain about body X. Scheduled at 50% estimated motor thrust-effectiveness loss.
+    // @Range: 0 20
+    // @User: Advanced
+    GSCALAR(m29_g50_kox, "M29_G50_KOX", M29_GS_KOX_DEFAULT),
+
+    // @Param: M29_G50_KOY
+    // @DisplayName: Mode29 50% loss KOY
+    // @Description: Angular-rate feedback gain about body Y. Scheduled at 50% estimated motor thrust-effectiveness loss.
+    // @Range: 0 20
+    // @User: Advanced
+    GSCALAR(m29_g50_koy, "M29_G50_KOY", M29_GS_KOY_DEFAULT),
+
+    // @Param: M29_G50_KOZ
+    // @DisplayName: Mode29 50% loss KOZ
+    // @Description: Angular-rate feedback gain about body Z. Scheduled at 50% estimated motor thrust-effectiveness loss.
+    // @Range: 0 20
+    // @User: Advanced
+    GSCALAR(m29_g50_koz, "M29_G50_KOZ", M29_GS_KOZ_DEFAULT),
+
+    // @Param: M29_G50_TILT
+    // @DisplayName: Mode29 50% loss TILT
+    // @Description: Maximum combined roll/pitch tilt for this motor-loss anchor. Scheduled at 50% estimated motor thrust-effectiveness loss.
+    // @Units: deg
+    // @Increment: 1
+    // @Range: 5 60
+    // @User: Advanced
+    GSCALAR(m29_g50_tilt, "M29_G50_TILT", M29_GS_TILT_DEFAULT),
+
+    // @Param: M29_G60_KRX
+    // @DisplayName: Mode29 60% loss KRX
+    // @Description: Attitude proportional gain about body X. Scheduled at 60% estimated motor thrust-effectiveness loss.
+    // @Range: 0 20
+    // @User: Advanced
+    GSCALAR(m29_g60_krx, "M29_G60_KRX", M29_GS_KRX_DEFAULT),
+
+    // @Param: M29_G60_KRY
+    // @DisplayName: Mode29 60% loss KRY
+    // @Description: Attitude proportional gain about body Y. Scheduled at 60% estimated motor thrust-effectiveness loss.
+    // @Range: 0 20
+    // @User: Advanced
+    GSCALAR(m29_g60_kry, "M29_G60_KRY", M29_GS_KRY_DEFAULT),
+
+    // @Param: M29_G60_KRZ
+    // @DisplayName: Mode29 60% loss KRZ
+    // @Description: Attitude proportional gain about body Z. Scheduled at 60% estimated motor thrust-effectiveness loss.
+    // @Range: 0 20
+    // @User: Advanced
+    GSCALAR(m29_g60_krz, "M29_G60_KRZ", M29_GS_KRZ_DEFAULT),
+
+    // @Param: M29_G60_KOX
+    // @DisplayName: Mode29 60% loss KOX
+    // @Description: Angular-rate feedback gain about body X. Scheduled at 60% estimated motor thrust-effectiveness loss.
+    // @Range: 0 20
+    // @User: Advanced
+    GSCALAR(m29_g60_kox, "M29_G60_KOX", M29_GS_KOX_DEFAULT),
+
+    // @Param: M29_G60_KOY
+    // @DisplayName: Mode29 60% loss KOY
+    // @Description: Angular-rate feedback gain about body Y. Scheduled at 60% estimated motor thrust-effectiveness loss.
+    // @Range: 0 20
+    // @User: Advanced
+    GSCALAR(m29_g60_koy, "M29_G60_KOY", M29_GS_KOY_DEFAULT),
+
+    // @Param: M29_G60_KOZ
+    // @DisplayName: Mode29 60% loss KOZ
+    // @Description: Angular-rate feedback gain about body Z. Scheduled at 60% estimated motor thrust-effectiveness loss.
+    // @Range: 0 20
+    // @User: Advanced
+    GSCALAR(m29_g60_koz, "M29_G60_KOZ", M29_GS_KOZ_DEFAULT),
+
+    // @Param: M29_G60_TILT
+    // @DisplayName: Mode29 60% loss TILT
+    // @Description: Maximum combined roll/pitch tilt for this motor-loss anchor. Scheduled at 60% estimated motor thrust-effectiveness loss.
+    // @Units: deg
+    // @Increment: 1
+    // @Range: 5 60
+    // @User: Advanced
+    GSCALAR(m29_g60_tilt, "M29_G60_TILT", M29_GS_TILT_DEFAULT),
+
+    // @Param: M29_G70_KRX
+    // @DisplayName: Mode29 70% loss KRX
+    // @Description: Attitude proportional gain about body X. Scheduled at 70% estimated motor thrust-effectiveness loss.
+    // @Range: 0 20
+    // @User: Advanced
+    GSCALAR(m29_g70_krx, "M29_G70_KRX", M29_GS_KRX_DEFAULT),
+
+    // @Param: M29_G70_KRY
+    // @DisplayName: Mode29 70% loss KRY
+    // @Description: Attitude proportional gain about body Y. Scheduled at 70% estimated motor thrust-effectiveness loss.
+    // @Range: 0 20
+    // @User: Advanced
+    GSCALAR(m29_g70_kry, "M29_G70_KRY", M29_GS_KRY_DEFAULT),
+
+    // @Param: M29_G70_KRZ
+    // @DisplayName: Mode29 70% loss KRZ
+    // @Description: Attitude proportional gain about body Z. Scheduled at 70% estimated motor thrust-effectiveness loss.
+    // @Range: 0 20
+    // @User: Advanced
+    GSCALAR(m29_g70_krz, "M29_G70_KRZ", M29_GS_KRZ_DEFAULT),
+
+    // @Param: M29_G70_KOX
+    // @DisplayName: Mode29 70% loss KOX
+    // @Description: Angular-rate feedback gain about body X. Scheduled at 70% estimated motor thrust-effectiveness loss.
+    // @Range: 0 20
+    // @User: Advanced
+    GSCALAR(m29_g70_kox, "M29_G70_KOX", M29_GS_KOX_DEFAULT),
+
+    // @Param: M29_G70_KOY
+    // @DisplayName: Mode29 70% loss KOY
+    // @Description: Angular-rate feedback gain about body Y. Scheduled at 70% estimated motor thrust-effectiveness loss.
+    // @Range: 0 20
+    // @User: Advanced
+    GSCALAR(m29_g70_koy, "M29_G70_KOY", M29_GS_KOY_DEFAULT),
+
+    // @Param: M29_G70_KOZ
+    // @DisplayName: Mode29 70% loss KOZ
+    // @Description: Angular-rate feedback gain about body Z. Scheduled at 70% estimated motor thrust-effectiveness loss.
+    // @Range: 0 20
+    // @User: Advanced
+    GSCALAR(m29_g70_koz, "M29_G70_KOZ", M29_GS_KOZ_DEFAULT),
+
+    // @Param: M29_G70_TILT
+    // @DisplayName: Mode29 70% loss TILT
+    // @Description: Maximum combined roll/pitch tilt for this motor-loss anchor. Scheduled at 70% estimated motor thrust-effectiveness loss.
+    // @Units: deg
+    // @Increment: 1
+    // @Range: 5 60
+    // @User: Advanced
+    GSCALAR(m29_g70_tilt, "M29_G70_TILT", M29_GS_TILT_DEFAULT),
+
+    // @Param: M29_G80_KRX
+    // @DisplayName: Mode29 80% loss KRX
+    // @Description: Attitude proportional gain about body X. Scheduled at 80% estimated motor thrust-effectiveness loss.
+    // @Range: 0 20
+    // @User: Advanced
+    GSCALAR(m29_g80_krx, "M29_G80_KRX", M29_GS_KRX_DEFAULT),
+
+    // @Param: M29_G80_KRY
+    // @DisplayName: Mode29 80% loss KRY
+    // @Description: Attitude proportional gain about body Y. Scheduled at 80% estimated motor thrust-effectiveness loss.
+    // @Range: 0 20
+    // @User: Advanced
+    GSCALAR(m29_g80_kry, "M29_G80_KRY", M29_GS_KRY_DEFAULT),
+
+    // @Param: M29_G80_KRZ
+    // @DisplayName: Mode29 80% loss KRZ
+    // @Description: Attitude proportional gain about body Z. Scheduled at 80% estimated motor thrust-effectiveness loss.
+    // @Range: 0 20
+    // @User: Advanced
+    GSCALAR(m29_g80_krz, "M29_G80_KRZ", M29_GS_KRZ_DEFAULT),
+
+    // @Param: M29_G80_KOX
+    // @DisplayName: Mode29 80% loss KOX
+    // @Description: Angular-rate feedback gain about body X. Scheduled at 80% estimated motor thrust-effectiveness loss.
+    // @Range: 0 20
+    // @User: Advanced
+    GSCALAR(m29_g80_kox, "M29_G80_KOX", M29_GS_KOX_DEFAULT),
+
+    // @Param: M29_G80_KOY
+    // @DisplayName: Mode29 80% loss KOY
+    // @Description: Angular-rate feedback gain about body Y. Scheduled at 80% estimated motor thrust-effectiveness loss.
+    // @Range: 0 20
+    // @User: Advanced
+    GSCALAR(m29_g80_koy, "M29_G80_KOY", M29_GS_KOY_DEFAULT),
+
+    // @Param: M29_G80_KOZ
+    // @DisplayName: Mode29 80% loss KOZ
+    // @Description: Angular-rate feedback gain about body Z. Scheduled at 80% estimated motor thrust-effectiveness loss.
+    // @Range: 0 20
+    // @User: Advanced
+    GSCALAR(m29_g80_koz, "M29_G80_KOZ", M29_GS_KOZ_DEFAULT),
+
+    // @Param: M29_G80_TILT
+    // @DisplayName: Mode29 80% loss TILT
+    // @Description: Maximum combined roll/pitch tilt for this motor-loss anchor. Scheduled at 80% estimated motor thrust-effectiveness loss.
+    // @Units: deg
+    // @Increment: 1
+    // @Range: 5 60
+    // @User: Advanced
+    GSCALAR(m29_g80_tilt, "M29_G80_TILT", M29_GS_TILT_DEFAULT),
+
+    // @Param: M29_G90_KRX
+    // @DisplayName: Mode29 90% loss KRX
+    // @Description: Attitude proportional gain about body X. Scheduled at 90% estimated motor thrust-effectiveness loss.
+    // @Range: 0 20
+    // @User: Advanced
+    GSCALAR(m29_g90_krx, "M29_G90_KRX", M29_GS_KRX_DEFAULT),
+
+    // @Param: M29_G90_KRY
+    // @DisplayName: Mode29 90% loss KRY
+    // @Description: Attitude proportional gain about body Y. Scheduled at 90% estimated motor thrust-effectiveness loss.
+    // @Range: 0 20
+    // @User: Advanced
+    GSCALAR(m29_g90_kry, "M29_G90_KRY", M29_GS_KRY_DEFAULT),
+
+    // @Param: M29_G90_KRZ
+    // @DisplayName: Mode29 90% loss KRZ
+    // @Description: Attitude proportional gain about body Z. Scheduled at 90% estimated motor thrust-effectiveness loss.
+    // @Range: 0 20
+    // @User: Advanced
+    GSCALAR(m29_g90_krz, "M29_G90_KRZ", M29_GS_KRZ_DEFAULT),
+
+    // @Param: M29_G90_KOX
+    // @DisplayName: Mode29 90% loss KOX
+    // @Description: Angular-rate feedback gain about body X. Scheduled at 90% estimated motor thrust-effectiveness loss.
+    // @Range: 0 20
+    // @User: Advanced
+    GSCALAR(m29_g90_kox, "M29_G90_KOX", M29_GS_KOX_DEFAULT),
+
+    // @Param: M29_G90_KOY
+    // @DisplayName: Mode29 90% loss KOY
+    // @Description: Angular-rate feedback gain about body Y. Scheduled at 90% estimated motor thrust-effectiveness loss.
+    // @Range: 0 20
+    // @User: Advanced
+    GSCALAR(m29_g90_koy, "M29_G90_KOY", M29_GS_KOY_DEFAULT),
+
+    // @Param: M29_G90_KOZ
+    // @DisplayName: Mode29 90% loss KOZ
+    // @Description: Angular-rate feedback gain about body Z. Scheduled at 90% estimated motor thrust-effectiveness loss.
+    // @Range: 0 20
+    // @User: Advanced
+    GSCALAR(m29_g90_koz, "M29_G90_KOZ", M29_GS_KOZ_DEFAULT),
+
+    // @Param: M29_G90_TILT
+    // @DisplayName: Mode29 90% loss TILT
+    // @Description: Maximum combined roll/pitch tilt for this motor-loss anchor. Scheduled at 90% estimated motor thrust-effectiveness loss.
+    // @Units: deg
+    // @Increment: 1
+    // @Range: 5 60
+    // @User: Advanced
+    GSCALAR(m29_g90_tilt, "M29_G90_TILT", M29_GS_TILT_DEFAULT),
+
+    // @Param: M29_G100_KRX
+    // @DisplayName: Mode29 100% loss KRX
+    // @Description: Attitude proportional gain about body X. Scheduled at 100% estimated motor thrust-effectiveness loss.
+    // @Range: 0 20
+    // @User: Advanced
+    GSCALAR(m29_g100_krx, "M29_G100_KRX", M29_GS_KRX_DEFAULT),
+
+    // @Param: M29_G100_KRY
+    // @DisplayName: Mode29 100% loss KRY
+    // @Description: Attitude proportional gain about body Y. Scheduled at 100% estimated motor thrust-effectiveness loss.
+    // @Range: 0 20
+    // @User: Advanced
+    GSCALAR(m29_g100_kry, "M29_G100_KRY", M29_GS_KRY_DEFAULT),
+
+    // @Param: M29_G100_KRZ
+    // @DisplayName: Mode29 100% loss KRZ
+    // @Description: Attitude proportional gain about body Z. Scheduled at 100% estimated motor thrust-effectiveness loss.
+    // @Range: 0 20
+    // @User: Advanced
+    GSCALAR(m29_g100_krz, "M29_G100_KRZ", M29_GS_KRZ_DEFAULT),
+
+    // @Param: M29_G100_KOX
+    // @DisplayName: Mode29 100% loss KOX
+    // @Description: Angular-rate feedback gain about body X. Scheduled at 100% estimated motor thrust-effectiveness loss.
+    // @Range: 0 20
+    // @User: Advanced
+    GSCALAR(m29_g100_kox, "M29_G100_KOX", M29_GS_KOX_DEFAULT),
+
+    // @Param: M29_G100_KOY
+    // @DisplayName: Mode29 100% loss KOY
+    // @Description: Angular-rate feedback gain about body Y. Scheduled at 100% estimated motor thrust-effectiveness loss.
+    // @Range: 0 20
+    // @User: Advanced
+    GSCALAR(m29_g100_koy, "M29_G100_KOY", M29_GS_KOY_DEFAULT),
+
+    // @Param: M29_G100_KOZ
+    // @DisplayName: Mode29 100% loss KOZ
+    // @Description: Angular-rate feedback gain about body Z. Scheduled at 100% estimated motor thrust-effectiveness loss.
+    // @Range: 0 20
+    // @User: Advanced
+    GSCALAR(m29_g100_koz, "M29_G100_KOZ", M29_GS_KOZ_DEFAULT),
+
+    // @Param: M29_G100_TILT
+    // @DisplayName: Mode29 100% loss TILT
+    // @Description: Maximum combined roll/pitch tilt for this motor-loss anchor. Scheduled at 100% estimated motor thrust-effectiveness loss.
+    // @Units: deg
+    // @Increment: 1
+    // @Range: 5 60
+    // @User: Advanced
+    GSCALAR(m29_g100_tilt, "M29_G100_TILT", M29_GS_TILT_DEFAULT),
 #endif
 
     // ACRO_RP_EXPO moved to Command Model class
