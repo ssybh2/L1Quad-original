@@ -57,6 +57,43 @@ MODE29_PARAMS = {
     "M29_TKOFF_T",
     "M29_SETTLE_T",
     "M29_MAX_TILT",
+    "M29_GS_MODE",
+    "M29_G50_KPX",
+    "M29_G50_KPY",
+    "M29_G50_KPZ",
+    "M29_G50_KVX",
+    "M29_G50_KVY",
+    "M29_G50_KVZ",
+    "M29_G60_KPX",
+    "M29_G60_KPY",
+    "M29_G60_KPZ",
+    "M29_G60_KVX",
+    "M29_G60_KVY",
+    "M29_G60_KVZ",
+    "M29_G70_KPX",
+    "M29_G70_KPY",
+    "M29_G70_KPZ",
+    "M29_G70_KVX",
+    "M29_G70_KVY",
+    "M29_G70_KVZ",
+    "M29_G80_KPX",
+    "M29_G80_KPY",
+    "M29_G80_KPZ",
+    "M29_G80_KVX",
+    "M29_G80_KVY",
+    "M29_G80_KVZ",
+    "M29_G90_KPX",
+    "M29_G90_KPY",
+    "M29_G90_KPZ",
+    "M29_G90_KVX",
+    "M29_G90_KVY",
+    "M29_G90_KVZ",
+    "M29_G100_KPX",
+    "M29_G100_KPY",
+    "M29_G100_KPZ",
+    "M29_G100_KVX",
+    "M29_G100_KVY",
+    "M29_G100_KVZ",
 }
 
 ARDUCOPTER_ATTITUDE_PARAMS = {
@@ -168,6 +205,80 @@ def load_profile(path):
         raise ValueError("M29_SETTLE_T must be in [0.0, 15.0] s")
     if "M29_MAX_TILT" in requested and not (5.0 <= requested["M29_MAX_TILT"] <= 60.0):
         raise ValueError("M29_MAX_TILT must be in [5.0, 60.0] deg")
+    if "M29_GS_MODE" in requested and requested["M29_GS_MODE"] not in (0.0, 1.0, 2.0):
+        raise ValueError("M29_GS_MODE must be 0, 1, or 2")
+    if "M29_G50_KPX" in requested and not (0.0 <= requested["M29_G50_KPX"] <= 50.0):
+        raise ValueError("M29_G50_KPX must be in [0, 50]")
+    if "M29_G50_KPY" in requested and not (0.0 <= requested["M29_G50_KPY"] <= 50.0):
+        raise ValueError("M29_G50_KPY must be in [0, 50]")
+    if "M29_G50_KPZ" in requested and not (0.0 <= requested["M29_G50_KPZ"] <= 50.0):
+        raise ValueError("M29_G50_KPZ must be in [0, 50]")
+    if "M29_G50_KVX" in requested and not (0.0 <= requested["M29_G50_KVX"] <= 50.0):
+        raise ValueError("M29_G50_KVX must be in [0, 50]")
+    if "M29_G50_KVY" in requested and not (0.0 <= requested["M29_G50_KVY"] <= 50.0):
+        raise ValueError("M29_G50_KVY must be in [0, 50]")
+    if "M29_G50_KVZ" in requested and not (0.0 <= requested["M29_G50_KVZ"] <= 50.0):
+        raise ValueError("M29_G50_KVZ must be in [0, 50]")
+    if "M29_G60_KPX" in requested and not (0.0 <= requested["M29_G60_KPX"] <= 50.0):
+        raise ValueError("M29_G60_KPX must be in [0, 50]")
+    if "M29_G60_KPY" in requested and not (0.0 <= requested["M29_G60_KPY"] <= 50.0):
+        raise ValueError("M29_G60_KPY must be in [0, 50]")
+    if "M29_G60_KPZ" in requested and not (0.0 <= requested["M29_G60_KPZ"] <= 50.0):
+        raise ValueError("M29_G60_KPZ must be in [0, 50]")
+    if "M29_G60_KVX" in requested and not (0.0 <= requested["M29_G60_KVX"] <= 50.0):
+        raise ValueError("M29_G60_KVX must be in [0, 50]")
+    if "M29_G60_KVY" in requested and not (0.0 <= requested["M29_G60_KVY"] <= 50.0):
+        raise ValueError("M29_G60_KVY must be in [0, 50]")
+    if "M29_G60_KVZ" in requested and not (0.0 <= requested["M29_G60_KVZ"] <= 50.0):
+        raise ValueError("M29_G60_KVZ must be in [0, 50]")
+    if "M29_G70_KPX" in requested and not (0.0 <= requested["M29_G70_KPX"] <= 50.0):
+        raise ValueError("M29_G70_KPX must be in [0, 50]")
+    if "M29_G70_KPY" in requested and not (0.0 <= requested["M29_G70_KPY"] <= 50.0):
+        raise ValueError("M29_G70_KPY must be in [0, 50]")
+    if "M29_G70_KPZ" in requested and not (0.0 <= requested["M29_G70_KPZ"] <= 50.0):
+        raise ValueError("M29_G70_KPZ must be in [0, 50]")
+    if "M29_G70_KVX" in requested and not (0.0 <= requested["M29_G70_KVX"] <= 50.0):
+        raise ValueError("M29_G70_KVX must be in [0, 50]")
+    if "M29_G70_KVY" in requested and not (0.0 <= requested["M29_G70_KVY"] <= 50.0):
+        raise ValueError("M29_G70_KVY must be in [0, 50]")
+    if "M29_G70_KVZ" in requested and not (0.0 <= requested["M29_G70_KVZ"] <= 50.0):
+        raise ValueError("M29_G70_KVZ must be in [0, 50]")
+    if "M29_G80_KPX" in requested and not (0.0 <= requested["M29_G80_KPX"] <= 50.0):
+        raise ValueError("M29_G80_KPX must be in [0, 50]")
+    if "M29_G80_KPY" in requested and not (0.0 <= requested["M29_G80_KPY"] <= 50.0):
+        raise ValueError("M29_G80_KPY must be in [0, 50]")
+    if "M29_G80_KPZ" in requested and not (0.0 <= requested["M29_G80_KPZ"] <= 50.0):
+        raise ValueError("M29_G80_KPZ must be in [0, 50]")
+    if "M29_G80_KVX" in requested and not (0.0 <= requested["M29_G80_KVX"] <= 50.0):
+        raise ValueError("M29_G80_KVX must be in [0, 50]")
+    if "M29_G80_KVY" in requested and not (0.0 <= requested["M29_G80_KVY"] <= 50.0):
+        raise ValueError("M29_G80_KVY must be in [0, 50]")
+    if "M29_G80_KVZ" in requested and not (0.0 <= requested["M29_G80_KVZ"] <= 50.0):
+        raise ValueError("M29_G80_KVZ must be in [0, 50]")
+    if "M29_G90_KPX" in requested and not (0.0 <= requested["M29_G90_KPX"] <= 50.0):
+        raise ValueError("M29_G90_KPX must be in [0, 50]")
+    if "M29_G90_KPY" in requested and not (0.0 <= requested["M29_G90_KPY"] <= 50.0):
+        raise ValueError("M29_G90_KPY must be in [0, 50]")
+    if "M29_G90_KPZ" in requested and not (0.0 <= requested["M29_G90_KPZ"] <= 50.0):
+        raise ValueError("M29_G90_KPZ must be in [0, 50]")
+    if "M29_G90_KVX" in requested and not (0.0 <= requested["M29_G90_KVX"] <= 50.0):
+        raise ValueError("M29_G90_KVX must be in [0, 50]")
+    if "M29_G90_KVY" in requested and not (0.0 <= requested["M29_G90_KVY"] <= 50.0):
+        raise ValueError("M29_G90_KVY must be in [0, 50]")
+    if "M29_G90_KVZ" in requested and not (0.0 <= requested["M29_G90_KVZ"] <= 50.0):
+        raise ValueError("M29_G90_KVZ must be in [0, 50]")
+    if "M29_G100_KPX" in requested and not (0.0 <= requested["M29_G100_KPX"] <= 50.0):
+        raise ValueError("M29_G100_KPX must be in [0, 50]")
+    if "M29_G100_KPY" in requested and not (0.0 <= requested["M29_G100_KPY"] <= 50.0):
+        raise ValueError("M29_G100_KPY must be in [0, 50]")
+    if "M29_G100_KPZ" in requested and not (0.0 <= requested["M29_G100_KPZ"] <= 50.0):
+        raise ValueError("M29_G100_KPZ must be in [0, 50]")
+    if "M29_G100_KVX" in requested and not (0.0 <= requested["M29_G100_KVX"] <= 50.0):
+        raise ValueError("M29_G100_KVX must be in [0, 50]")
+    if "M29_G100_KVY" in requested and not (0.0 <= requested["M29_G100_KVY"] <= 50.0):
+        raise ValueError("M29_G100_KVY must be in [0, 50]")
+    if "M29_G100_KVZ" in requested and not (0.0 <= requested["M29_G100_KVZ"] <= 50.0):
+        raise ValueError("M29_G100_KVZ must be in [0, 50]")
 
     return document, requested
 
