@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - softdrone
+      - feature/mode29-fdi-recovery
   workflow_dispatch:
 
 jobs:
@@ -39,7 +40,7 @@ jobs:
       - name: Upload flashable firmware
         uses: actions/upload-artifact@v4
         with:
-          name: softdrone-pixhawk6c-firmware
+          name: mode29-fdi-recovery-pixhawk6c-firmware
           path: |
             ardupilot/build/Pixhawk6C/bin/arducopter.apj
             ardupilot/build/Pixhawk6C/bin/arducopter.bin
