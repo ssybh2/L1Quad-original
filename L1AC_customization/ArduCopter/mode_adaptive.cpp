@@ -181,7 +181,6 @@ bool ModeAdaptive::init(bool ignore_checks)
     landingTriggered = 0;
     clear_motor_degradation_command();
     clear_auto_motor_fault();
-    reset_gain_schedule();
 
     if (!ahrs.have_inertial_nav()) {
         GCS_SEND_TEXT(MAV_SEVERITY_CRITICAL,
@@ -296,6 +295,7 @@ bool ModeAdaptive::init(bool ignore_checks)
     takeoffTime = configured_takeoff_time;
     settleTime = configured_settle_time;
     maxTiltDeg = configured_max_tilt;
+    reset_gain_schedule();
 
     motorEnable = 1;
 
@@ -400,7 +400,7 @@ void ModeAdaptive::reset_gain_schedule()
     gain_schedule_active.koy = g.GeoCtrl_KOy;
     gain_schedule_active.koz = g.GeoCtrl_KOz;
     gain_schedule_active.max_tilt_deg =
-        constrain_float((float)g.m29_max_tilt, 5.0f, 60.0f);
+        constrain_float(maxTiltDeg, 5.0f, 60.0f);
 }
 
 ModeAdaptive::GainScheduleSet ModeAdaptive::gain_schedule_at_loss(float loss_pct) const
@@ -418,7 +418,7 @@ ModeAdaptive::GainScheduleSet ModeAdaptive::gain_schedule_at_loss(float loss_pct
         (float)g.GeoCtrl_KOx,
         (float)g.GeoCtrl_KOy,
         (float)g.GeoCtrl_KOz,
-        constrain_float((float)g.m29_max_tilt, 5.0f, 60.0f)
+        constrain_float(maxTiltDeg, 5.0f, 60.0f)
     };
 
     const GainScheduleSet anchors[6] = {
@@ -1481,8 +1481,8 @@ VectorN<float, 4> ModeAdaptive::geometricController(Vector3f targetPos,
     // The projection does two things:
     //   1. keeps a small positive upright component so inverted thrust is
     //      never requested; gravity can still provide downward acceleration;
-    //   2. limits the horizontal/vertical ratio to tan(M29_MAX_TILT), which
-    //      bounds the combined commanded roll/pitch tilt.
+    //   2. limits the horizontal/vertical ratio using the active scheduled
+    //      tilt anchor (or M29_MAX_TILT when scheduling is disabled).
     bool thrust_vector_limited = false;
     Vector3f desired_body_z_force = -target_force;
     const float min_upright_force =
