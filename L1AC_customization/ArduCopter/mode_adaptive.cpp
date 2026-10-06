@@ -180,6 +180,7 @@ bool ModeAdaptive::init(bool ignore_checks)
     landingComplete = 0;
     landingTriggered = 0;
     clear_motor_degradation_command();
+    clear_auto_motor_fault();
 
     if (!ahrs.have_inertial_nav()) {
         GCS_SEND_TEXT(MAV_SEVERITY_CRITICAL,
@@ -317,8 +318,9 @@ bool ModeAdaptive::init(bool ignore_checks)
 
 void ModeAdaptive::exit()
 {
-    // Leaving Mode 29 immediately clears the injected actuator fault.
+    // Leaving Mode 29 immediately clears both injected and detected faults.
     clear_motor_degradation_command();
+    clear_auto_motor_fault();
 }
 
 void ModeAdaptive::set_motor_degradation_command(bool enable, uint8_t motor_id, float loss_pct, bool yaw_free)
@@ -353,6 +355,215 @@ bool ModeAdaptive::motor_degradation_command_fresh(uint32_t now_ms) const
     return motor_degradation_enabled &&
            motor_degradation_last_rx_ms != 0U &&
            (now_ms - motor_degradation_last_rx_ms) <= MOTOR_DEG_WATCHDOG_MS;
+}
+
+void ModeAdaptive::clear_auto_motor_fault()
+{
+    motor_fault_confirmed = false;
+    motor_fault_detected_id = 0;
+    motor_fault_candidate_id = 0;
+    motor_fault_confirm_count = 0;
+    motor_fault_loss_estimate_pct = 0.0f;
+    motor_fault_residual_ratio = 1.0f;
+    motor_fault_sigma_filtered.x = 0.0f;
+    motor_fault_sigma_filtered.y = 0.0f;
+    motor_fault_sigma_filtered.z = 0.0f;
+    motor_fault_sigma_baseline.x = 0.0f;
+    motor_fault_sigma_baseline.y = 0.0f;
+    motor_fault_sigma_baseline.z = 0.0f;
+    motor_fault_sigma_valid = false;
+    mode29_zero(motor_fault_nominal_prev);
+    motor_fault_nominal_prev_valid = false;
+}
+
+void ModeAdaptive::update_auto_motor_fault_detector(float time_in_this_run)
+{
+    // IMPORTANT: this detector is intentionally blind to the fault injector.
+    // It does not read motor_degradation_motor_id or motor_degradation_loss_pct.
+    // It identifies the motor only from the L1 matched-moment estimate and
+    // the previous nominal actuator commands.
+    Vector3f sigma_now = {
+        sigma_m_hat_prev[1],
+        sigma_m_hat_prev[2],
+        sigma_m_hat_prev[3]
+    };
+
+    if (!mode29_finite(sigma_now)) {
+        motor_fault_candidate_id = 0;
+        motor_fault_confirm_count = 0;
+        return;
+    }
+
+    if (!motor_fault_sigma_valid) {
+        motor_fault_sigma_filtered = sigma_now;
+        motor_fault_sigma_baseline = sigma_now;
+        motor_fault_sigma_valid = true;
+        return;
+    }
+
+    // Roughly 50 ms low-pass at the 400 Hz Mode29 update rate.  The healthy
+    // baseline moves much more slowly and is frozen while a severe candidate
+    // is being accumulated.
+    constexpr float sigma_alpha = 0.05f;
+    constexpr float baseline_alpha_fast = 0.02f;
+    constexpr float baseline_alpha_slow = 0.0005f;
+    motor_fault_sigma_filtered =
+        motor_fault_sigma_filtered +
+        (sigma_now - motor_fault_sigma_filtered) * sigma_alpha;
+
+    const bool detector_gate =
+        motors->armed() &&
+        trajIndex == 0 &&
+        !g.LandFlag &&
+        g.l1enable != 0 &&
+        time_in_this_run >= (takeoffTime + settleTime) &&
+        motor_fault_nominal_prev_valid;
+
+    if (!detector_gate) {
+        motor_fault_sigma_baseline =
+            motor_fault_sigma_baseline +
+            (motor_fault_sigma_filtered - motor_fault_sigma_baseline) *
+                baseline_alpha_fast;
+        motor_fault_candidate_id = 0;
+        motor_fault_confirm_count = 0;
+        motor_fault_loss_estimate_pct = 0.0f;
+        motor_fault_residual_ratio = 1.0f;
+        return;
+    }
+
+    if (motor_fault_confirmed) {
+        return;
+    }
+
+    const Vector3f observed =
+        motor_fault_sigma_filtered - motor_fault_sigma_baseline;
+    const float observed_rp =
+        sqrtf(observed.x * observed.x + observed.y * observed.y);
+    const float observed_norm = observed.length();
+
+    if (!isfinite(observed_norm) ||
+        observed_rp < MOTOR_FDI_MIN_RP_MOMENT) {
+        motor_fault_sigma_baseline =
+            motor_fault_sigma_baseline +
+            (motor_fault_sigma_filtered - motor_fault_sigma_baseline) *
+                baseline_alpha_slow;
+        motor_fault_candidate_id = 0;
+        motor_fault_confirm_count = 0;
+        motor_fault_loss_estimate_pct = 0.0f;
+        motor_fault_residual_ratio = 1.0f;
+        return;
+    }
+
+#if (!REAL_OR_SITL)
+    const float detector_L = 0.25f;
+    const float detector_D = 0.25f;
+    const float detector_a_F = 0.0014597f;
+    const float detector_b_F = 0.043693f;
+    const float detector_a_M = 0.000011667f;
+    const float detector_b_M = 0.0059137f;
+#elif (REAL_OR_SITL)
+    const float detector_L = 0.28f;
+    const float detector_D = 0.28f;
+#endif
+
+    uint8_t best_motor = 0;
+    float best_loss = 0.0f;
+    float best_ratio = 999.0f;
+
+    for (uint8_t i = 0; i < 4; i++) {
+        const float w =
+            constrain_float(motor_fault_nominal_prev[i], 0.0f, 100.0f);
+
+#if (!REAL_OR_SITL)
+        const float f_nom = detector_a_F * w * w + detector_b_F * w;
+        const float m_nom = detector_a_M * w * w + detector_b_M * w;
+#elif (REAL_OR_SITL)
+        const float f_nom = softdrone_thrust_from_w(w);
+        const float m_nom = softdrone_moment_from_w(w);
+#endif
+
+        Vector3f full_loss_signature;
+        switch (i) {
+        case 0: // M1 front-right, CCW
+            full_loss_signature.x = +0.5f * detector_L * f_nom;
+            full_loss_signature.y = -0.5f * detector_D * f_nom;
+            full_loss_signature.z = -m_nom;
+            break;
+        case 1: // M2 rear-left, CCW
+            full_loss_signature.x = -0.5f * detector_L * f_nom;
+            full_loss_signature.y = +0.5f * detector_D * f_nom;
+            full_loss_signature.z = -m_nom;
+            break;
+        case 2: // M3 front-left, CW
+            full_loss_signature.x = -0.5f * detector_L * f_nom;
+            full_loss_signature.y = -0.5f * detector_D * f_nom;
+            full_loss_signature.z = +m_nom;
+            break;
+        default: // M4 rear-right, CW
+            full_loss_signature.x = +0.5f * detector_L * f_nom;
+            full_loss_signature.y = +0.5f * detector_D * f_nom;
+            full_loss_signature.z = +m_nom;
+            break;
+        }
+
+        const float signature_norm_sq =
+            full_loss_signature * full_loss_signature;
+        if (!isfinite(signature_norm_sq) || signature_norm_sq < 1.0e-6f) {
+            continue;
+        }
+
+        const float loss_fraction = constrain_float(
+            (observed * full_loss_signature) / signature_norm_sq,
+            0.0f,
+            1.0f
+        );
+        const Vector3f fit_error =
+            observed - full_loss_signature * loss_fraction;
+        const float residual_ratio =
+            fit_error.length() / MAX(observed_norm, 1.0e-4f);
+
+        if (isfinite(residual_ratio) && residual_ratio < best_ratio) {
+            best_ratio = residual_ratio;
+            best_loss = loss_fraction;
+            best_motor = i + 1;
+        }
+    }
+
+    motor_fault_loss_estimate_pct = 100.0f * best_loss;
+    motor_fault_residual_ratio = best_ratio;
+
+    const bool severe_candidate =
+        best_motor != 0 &&
+        best_loss >= MOTOR_FDI_MIN_LOSS_FRACTION &&
+        best_ratio <= MOTOR_FDI_MAX_RESIDUAL_RATIO;
+
+    if (!severe_candidate) {
+        motor_fault_sigma_baseline =
+            motor_fault_sigma_baseline +
+            (motor_fault_sigma_filtered - motor_fault_sigma_baseline) *
+                baseline_alpha_slow;
+        motor_fault_candidate_id = 0;
+        motor_fault_confirm_count = 0;
+        return;
+    }
+
+    if (motor_fault_candidate_id == best_motor) {
+        if (motor_fault_confirm_count < 65535U) {
+            motor_fault_confirm_count++;
+        }
+    } else {
+        motor_fault_candidate_id = best_motor;
+        motor_fault_confirm_count = 1;
+    }
+
+    if (motor_fault_confirm_count >= MOTOR_FDI_CONFIRM_SAMPLES) {
+        motor_fault_confirmed = true;
+        motor_fault_detected_id = best_motor;
+        GCS_SEND_TEXT(MAV_SEVERITY_CRITICAL,
+                      "Mode29 FDI: M%u severe loss %.0f%%",
+                      (unsigned)motor_fault_detected_id,
+                      (double)motor_fault_loss_estimate_pct);
+    }
 }
 
 void ModeAdaptive::run()
@@ -407,6 +618,7 @@ void ModeAdaptive::run()
     // a latched ArduPilot internal error after an emergency disarm.
     if (!motors->armed()) {
         clear_motor_degradation_command();
+        clear_auto_motor_fault();
         return;
     }
 
@@ -661,8 +873,14 @@ void ModeAdaptive::run()
         motor_degradation_loss_pct > 0.0f &&
         motor_degradation_command_fresh(motor_deg_now_ms);
 
+    // Blind FDI uses the previous cycle's L1 matched-moment estimate and
+    // nominal actuator commands. A confirmed severe fault automatically
+    // releases yaw even when the injector itself requested keep-yaw.
+    update_auto_motor_fault_detector(timeInThisRun);
+
     const bool yaw_free_active =
-        motor_degradation_active && motor_degradation_yaw_free;
+        motor_fault_confirmed ||
+        (motor_degradation_active && motor_degradation_yaw_free);
 
     if (yaw_free_active) {
         // Keep estimating yaw, but stop asking the aircraft to return to a
@@ -750,10 +968,16 @@ void ModeAdaptive::run()
     // mixer. Fault mode intentionally drops the yaw-moment objective so the
     // remaining actuator authority is spent on thrust, roll and pitch.
     VectorN<float, 4> motorPWMCommanded;
-    if (yaw_free_active) {
-        motorPWMCommanded = motorMixingYawFree(thrustMomentCmd + L1thrustMomentCmd);
+    if (motor_fault_confirmed) {
+        motorPWMCommanded =
+            motorMixingYawFreeFaultAware(thrustMomentCmd + L1thrustMomentCmd,
+                                         motor_fault_detected_id);
+    } else if (yaw_free_active) {
+        motorPWMCommanded =
+            motorMixingYawFree(thrustMomentCmd + L1thrustMomentCmd);
     } else {
-        motorPWMCommanded = motorMixing(thrustMomentCmd + L1thrustMomentCmd);
+        motorPWMCommanded =
+            motorMixing(thrustMomentCmd + L1thrustMomentCmd);
     }
 
     // Never pass NaN/Inf into constrain_float(). ArduPilot intentionally
@@ -770,6 +994,9 @@ void ModeAdaptive::run()
     for (uint8_t i = 0; i < 4; i++) {
         motorPWMCommanded[i] = constrain_float(motorPWMCommanded[i], 0.0f, 100.0f);
     }
+
+    motor_fault_nominal_prev = motorPWMCommanded;
+    motor_fault_nominal_prev_valid = true;
 
     VectorN<float, 4> motorPWM = motorPWMCommanded;
 
@@ -819,6 +1046,22 @@ void ModeAdaptive::run()
                        (double)motorPWM[1],
                        (double)motorPWM[2],
                        (double)motorPWM[3]);
+
+    const uint8_t fdi_state =
+        motor_fault_confirmed ? 2U :
+        (motor_fault_candidate_id != 0 ? 1U : 0U);
+    AP::logger().Write("L1FD",
+                       "state,motor,cand,count,loss,res,smx,smy,smz",
+                       "BBBHfffff",
+                       fdi_state,
+                       motor_fault_detected_id,
+                       motor_fault_candidate_id,
+                       motor_fault_confirm_count,
+                       (double)motor_fault_loss_estimate_pct,
+                       (double)motor_fault_residual_ratio,
+                       (double)(sigma_m_hat_prev[1]),
+                       (double)(sigma_m_hat_prev[2]),
+                       (double)(sigma_m_hat_prev[3]));
 
     if (motors->armed()) // only command the motor PWM when the vehicle is armed.
     {
