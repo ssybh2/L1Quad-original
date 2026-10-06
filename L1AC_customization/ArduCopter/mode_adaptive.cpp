@@ -181,7 +181,7 @@ bool ModeAdaptive::init(bool ignore_checks)
     landingTriggered = 0;
     clear_motor_degradation_command();
     clear_auto_motor_fault();
-    reset_position_gain_schedule();
+    reset_gain_schedule();
 
     if (!ahrs.have_inertial_nav()) {
         GCS_SEND_TEXT(MAV_SEVERITY_CRITICAL,
@@ -322,7 +322,7 @@ void ModeAdaptive::exit()
     // Leaving Mode 29 immediately clears both injected and detected faults.
     clear_motor_degradation_command();
     clear_auto_motor_fault();
-    reset_position_gain_schedule();
+    reset_gain_schedule();
 }
 
 void ModeAdaptive::set_motor_degradation_command(bool enable, uint8_t motor_id, float loss_pct, bool yaw_free)
@@ -381,63 +381,107 @@ void ModeAdaptive::clear_auto_motor_fault()
 }
 
 
-void ModeAdaptive::reset_position_gain_schedule()
+void ModeAdaptive::reset_gain_schedule()
 {
-    position_gain_loss_raw_pct = 0.0f;
-    position_gain_loss_sched_pct = 0.0f;
-    position_gain_confidence = 0.0f;
-    position_gain_active.kpx = g.GeoCtrl_Kpx;
-    position_gain_active.kpy = g.GeoCtrl_Kpy;
-    position_gain_active.kpz = g.GeoCtrl_Kpz;
-    position_gain_active.kvx = g.GeoCtrl_Kvx;
-    position_gain_active.kvy = g.GeoCtrl_Kvy;
-    position_gain_active.kvz = g.GeoCtrl_Kvz;
+    gain_schedule_loss_raw_pct = 0.0f;
+    gain_schedule_loss_sched_pct = 0.0f;
+    gain_schedule_confidence = 0.0f;
+
+    gain_schedule_active.kpx = g.GeoCtrl_Kpx;
+    gain_schedule_active.kpy = g.GeoCtrl_Kpy;
+    gain_schedule_active.kpz = g.GeoCtrl_Kpz;
+    gain_schedule_active.kvx = g.GeoCtrl_Kvx;
+    gain_schedule_active.kvy = g.GeoCtrl_Kvy;
+    gain_schedule_active.kvz = g.GeoCtrl_Kvz;
+    gain_schedule_active.krx = g.GeoCtrl_KRx;
+    gain_schedule_active.kry = g.GeoCtrl_KRy;
+    gain_schedule_active.krz = g.GeoCtrl_KRz;
+    gain_schedule_active.kox = g.GeoCtrl_KOx;
+    gain_schedule_active.koy = g.GeoCtrl_KOy;
+    gain_schedule_active.koz = g.GeoCtrl_KOz;
+    gain_schedule_active.max_tilt_deg =
+        constrain_float((float)g.m29_max_tilt, 5.0f, 60.0f);
 }
 
-ModeAdaptive::PositionGainSet ModeAdaptive::position_gain_at_loss(float loss_pct) const
+ModeAdaptive::GainScheduleSet ModeAdaptive::gain_schedule_at_loss(float loss_pct) const
 {
-    const PositionGainSet base = {
+    const GainScheduleSet base = {
         (float)g.GeoCtrl_Kpx,
         (float)g.GeoCtrl_Kpy,
         (float)g.GeoCtrl_Kpz,
         (float)g.GeoCtrl_Kvx,
         (float)g.GeoCtrl_Kvy,
-        (float)g.GeoCtrl_Kvz
+        (float)g.GeoCtrl_Kvz,
+        (float)g.GeoCtrl_KRx,
+        (float)g.GeoCtrl_KRy,
+        (float)g.GeoCtrl_KRz,
+        (float)g.GeoCtrl_KOx,
+        (float)g.GeoCtrl_KOy,
+        (float)g.GeoCtrl_KOz,
+        constrain_float((float)g.m29_max_tilt, 5.0f, 60.0f)
     };
 
-    const PositionGainSet anchors[6] = {
+    const GainScheduleSet anchors[6] = {
         {(float)g.m29_g50_kpx,  (float)g.m29_g50_kpy,  (float)g.m29_g50_kpz,
-         (float)g.m29_g50_kvx,  (float)g.m29_g50_kvy,  (float)g.m29_g50_kvz},
+         (float)g.m29_g50_kvx,  (float)g.m29_g50_kvy,  (float)g.m29_g50_kvz,
+         (float)g.m29_g50_krx,  (float)g.m29_g50_kry,  (float)g.m29_g50_krz,
+         (float)g.m29_g50_kox,  (float)g.m29_g50_koy,  (float)g.m29_g50_koz,
+         (float)g.m29_g50_tilt},
         {(float)g.m29_g60_kpx,  (float)g.m29_g60_kpy,  (float)g.m29_g60_kpz,
-         (float)g.m29_g60_kvx,  (float)g.m29_g60_kvy,  (float)g.m29_g60_kvz},
+         (float)g.m29_g60_kvx,  (float)g.m29_g60_kvy,  (float)g.m29_g60_kvz,
+         (float)g.m29_g60_krx,  (float)g.m29_g60_kry,  (float)g.m29_g60_krz,
+         (float)g.m29_g60_kox,  (float)g.m29_g60_koy,  (float)g.m29_g60_koz,
+         (float)g.m29_g60_tilt},
         {(float)g.m29_g70_kpx,  (float)g.m29_g70_kpy,  (float)g.m29_g70_kpz,
-         (float)g.m29_g70_kvx,  (float)g.m29_g70_kvy,  (float)g.m29_g70_kvz},
+         (float)g.m29_g70_kvx,  (float)g.m29_g70_kvy,  (float)g.m29_g70_kvz,
+         (float)g.m29_g70_krx,  (float)g.m29_g70_kry,  (float)g.m29_g70_krz,
+         (float)g.m29_g70_kox,  (float)g.m29_g70_koy,  (float)g.m29_g70_koz,
+         (float)g.m29_g70_tilt},
         {(float)g.m29_g80_kpx,  (float)g.m29_g80_kpy,  (float)g.m29_g80_kpz,
-         (float)g.m29_g80_kvx,  (float)g.m29_g80_kvy,  (float)g.m29_g80_kvz},
+         (float)g.m29_g80_kvx,  (float)g.m29_g80_kvy,  (float)g.m29_g80_kvz,
+         (float)g.m29_g80_krx,  (float)g.m29_g80_kry,  (float)g.m29_g80_krz,
+         (float)g.m29_g80_kox,  (float)g.m29_g80_koy,  (float)g.m29_g80_koz,
+         (float)g.m29_g80_tilt},
         {(float)g.m29_g90_kpx,  (float)g.m29_g90_kpy,  (float)g.m29_g90_kpz,
-         (float)g.m29_g90_kvx,  (float)g.m29_g90_kvy,  (float)g.m29_g90_kvz},
+         (float)g.m29_g90_kvx,  (float)g.m29_g90_kvy,  (float)g.m29_g90_kvz,
+         (float)g.m29_g90_krx,  (float)g.m29_g90_kry,  (float)g.m29_g90_krz,
+         (float)g.m29_g90_kox,  (float)g.m29_g90_koy,  (float)g.m29_g90_koz,
+         (float)g.m29_g90_tilt},
         {(float)g.m29_g100_kpx, (float)g.m29_g100_kpy, (float)g.m29_g100_kpz,
-         (float)g.m29_g100_kvx, (float)g.m29_g100_kvy, (float)g.m29_g100_kvz}
+         (float)g.m29_g100_kvx, (float)g.m29_g100_kvy, (float)g.m29_g100_kvz,
+         (float)g.m29_g100_krx, (float)g.m29_g100_kry, (float)g.m29_g100_krz,
+         (float)g.m29_g100_kox, (float)g.m29_g100_koy, (float)g.m29_g100_koz,
+         (float)g.m29_g100_tilt}
     };
 
-    const auto interpolate = [](const PositionGainSet &a,
-                                const PositionGainSet &b,
+    const auto interpolate = [](const GainScheduleSet &a,
+                                const GainScheduleSet &b,
                                 float t) {
         t = constrain_float(t, 0.0f, 1.0f);
-        PositionGainSet out;
+        GainScheduleSet out;
         out.kpx = a.kpx + (b.kpx - a.kpx) * t;
         out.kpy = a.kpy + (b.kpy - a.kpy) * t;
         out.kpz = a.kpz + (b.kpz - a.kpz) * t;
         out.kvx = a.kvx + (b.kvx - a.kvx) * t;
         out.kvy = a.kvy + (b.kvy - a.kvy) * t;
         out.kvz = a.kvz + (b.kvz - a.kvz) * t;
+        out.krx = a.krx + (b.krx - a.krx) * t;
+        out.kry = a.kry + (b.kry - a.kry) * t;
+        out.krz = a.krz + (b.krz - a.krz) * t;
+        out.kox = a.kox + (b.kox - a.kox) * t;
+        out.koy = a.koy + (b.koy - a.koy) * t;
+        out.koz = a.koz + (b.koz - a.koz) * t;
+        out.max_tilt_deg =
+            constrain_float(a.max_tilt_deg + (b.max_tilt_deg - a.max_tilt_deg) * t,
+                            5.0f,
+                            60.0f);
         return out;
     };
 
     const float loss = constrain_float(loss_pct, 0.0f, 100.0f);
 
-    // Keep the proven no-/mild-fault gains untouched below 45%. Blend into
-    // the first calibrated 50% anchor over 45..50% to avoid a gain step.
+    // Preserve the proven normal controller below 45% loss. Blend smoothly
+    // into the first 50% calibrated anchor over 45..50%.
     if (loss <= 45.0f) {
         return base;
     }
@@ -459,24 +503,22 @@ ModeAdaptive::PositionGainSet ModeAdaptive::position_gain_at_loss(float loss_pct
     return interpolate(anchors[lower], anchors[lower + 1U], t);
 }
 
-void ModeAdaptive::update_position_gain_schedule(bool motor_degradation_active)
+void ModeAdaptive::update_gain_schedule(bool motor_degradation_active)
 {
     const int8_t mode = constrain_int16((int16_t)g.m29_gs_mode, 0, 2);
     float raw_loss = 0.0f;
     float confidence = 0.0f;
 
     if (mode == 1) {
-        // Oracle/calibration mode: use the known injected loss only for gain
-        // selection. This intentionally bypasses FDI so each 10% anchor can be
-        // tuned independently and repeatably.
+        // Oracle/calibration mode: use the known injected loss only for
+        // scheduling. This bypasses FDI so each anchor can be tuned
+        // independently and repeatably.
         if (motor_degradation_active) {
             raw_loss = constrain_float(motor_degradation_loss_pct, 0.0f, 100.0f);
             confidence = 1.0f;
         }
     } else if (mode == 2) {
-        // Automatic mode: use the onboard blind FDI severity estimate. The
-        // scheduler is only allowed to move when the signature fit is credible
-        // and the estimated loss is near the calibrated region.
+        // Automatic mode: use the onboard blind-FDI severity estimate.
         const float fit_limit = 0.55f;
         const float fit_confidence = constrain_float(
             1.0f - motor_fault_residual_ratio / fit_limit,
@@ -495,35 +537,32 @@ void ModeAdaptive::update_position_gain_schedule(bool motor_degradation_active)
         }
     }
 
-    position_gain_loss_raw_pct = raw_loss;
-    position_gain_confidence = confidence;
+    gain_schedule_loss_raw_pct = raw_loss;
+    gain_schedule_confidence = confidence;
 
     if (mode == 0) {
-        // Disabled means exactly the milestone controller: use the normal
-        // GEOCTRL_KP*/KV* values with no scheduling at all.
-        position_gain_loss_sched_pct = 0.0f;
-        position_gain_active = position_gain_at_loss(0.0f);
+        gain_schedule_loss_sched_pct = 0.0f;
+        gain_schedule_active = gain_schedule_at_loss(0.0f);
         return;
     }
 
-    // Confidence gate plus fast, bounded scheduling dynamics. At 400 Hz the
-    // 0.08 LPF coefficient is roughly a 30 ms time constant, while the 2.5%
-    // per-cycle limiter caps severity motion at about 1000 percentage-points/s.
-    // This suppresses estimator jitter without creating a large extra delay.
+    // Confidence gate, LPF and rate limiter prevent gain/tilt chatter when
+    // automatic severity estimation is noisy. Oracle mode passes through the
+    // same smooth transition so the fault step does not create a parameter step.
     const float target_loss = confidence >= 0.20f ? raw_loss : 0.0f;
     const float lpf_target =
-        position_gain_loss_sched_pct +
-        0.08f * (target_loss - position_gain_loss_sched_pct);
+        gain_schedule_loss_sched_pct +
+        0.08f * (target_loss - gain_schedule_loss_sched_pct);
     const float delta = constrain_float(
-        lpf_target - position_gain_loss_sched_pct,
+        lpf_target - gain_schedule_loss_sched_pct,
         -2.5f,
         2.5f
     );
-    position_gain_loss_sched_pct =
-        constrain_float(position_gain_loss_sched_pct + delta, 0.0f, 100.0f);
+    gain_schedule_loss_sched_pct =
+        constrain_float(gain_schedule_loss_sched_pct + delta, 0.0f, 100.0f);
 
-    position_gain_active =
-        position_gain_at_loss(position_gain_loss_sched_pct);
+    gain_schedule_active =
+        gain_schedule_at_loss(gain_schedule_loss_sched_pct);
 }
 
 void ModeAdaptive::update_auto_motor_fault_detector(float time_in_this_run)
@@ -863,7 +902,7 @@ void ModeAdaptive::run()
     if (!motors->armed()) {
         clear_motor_degradation_command();
         clear_auto_motor_fault();
-        reset_position_gain_schedule();
+        reset_gain_schedule();
         return;
     }
 
@@ -1122,21 +1161,32 @@ void ModeAdaptive::run()
     // nominal actuator commands. A confirmed severe fault automatically
     // releases yaw even when the injector itself requested keep-yaw.
     update_auto_motor_fault_detector(timeInThisRun);
-    update_position_gain_schedule(motor_degradation_active);
+    update_gain_schedule(motor_degradation_active);
 
     AP::logger().Write("L1GS",
                        "mode,raw,sched,conf,kpx,kpy,kpz,kvx,kvy,kvz",
                        "Bfffffffff",
                        (uint8_t)constrain_int16((int16_t)g.m29_gs_mode, 0, 2),
-                       (double)position_gain_loss_raw_pct,
-                       (double)position_gain_loss_sched_pct,
-                       (double)position_gain_confidence,
-                       (double)position_gain_active.kpx,
-                       (double)position_gain_active.kpy,
-                       (double)position_gain_active.kpz,
-                       (double)position_gain_active.kvx,
-                       (double)position_gain_active.kvy,
-                       (double)position_gain_active.kvz);
+                       (double)gain_schedule_loss_raw_pct,
+                       (double)gain_schedule_loss_sched_pct,
+                       (double)gain_schedule_confidence,
+                       (double)gain_schedule_active.kpx,
+                       (double)gain_schedule_active.kpy,
+                       (double)gain_schedule_active.kpz,
+                       (double)gain_schedule_active.kvx,
+                       (double)gain_schedule_active.kvy,
+                       (double)gain_schedule_active.kvz);
+
+    AP::logger().Write("L1GA",
+                       "krx,kry,krz,kox,koy,koz,tilt",
+                       "fffffff",
+                       (double)gain_schedule_active.krx,
+                       (double)gain_schedule_active.kry,
+                       (double)gain_schedule_active.krz,
+                       (double)gain_schedule_active.kox,
+                       (double)gain_schedule_active.koy,
+                       (double)gain_schedule_active.koz,
+                       (double)gain_schedule_active.max_tilt_deg);
 
     const bool yaw_free_active =
         motor_fault_yaw_free_latched ||
@@ -1413,12 +1463,12 @@ VectorN<float, 4> ModeAdaptive::geometricController(Vector3f targetPos,
     // Velocity Error (ev)
     v_error = stateVel - targetVel;
 
-    // Target force. Only the position/velocity loop gains are eligible for
-    // scheduling; attitude/rate and L1 gains are deliberately unchanged.
-    const PositionGainSet &pg = position_gain_active;
-    target_force.x = kg_vehicleMass * targetAcc.x - pg.kpx * r_error.x - pg.kvx * v_error.x;
-    target_force.y = kg_vehicleMass * targetAcc.y - pg.kpy * r_error.y - pg.kvy * v_error.y;
-    target_force.z = kg_vehicleMass * (targetAcc.z - GRAVITY_MAGNITUDE) - pg.kpz * r_error.z - pg.kvz * v_error.z;
+    // Scheduled geometric-controller gains. L1 adaptation parameters remain
+    // fixed; only the baseline geometric controller and its tilt envelope vary.
+    const GainScheduleSet &gs = gain_schedule_active;
+    target_force.x = kg_vehicleMass * targetAcc.x - gs.kpx * r_error.x - gs.kvx * v_error.x;
+    target_force.y = kg_vehicleMass * targetAcc.y - gs.kpy * r_error.y - gs.kvy * v_error.y;
+    target_force.z = kg_vehicleMass * (targetAcc.z - GRAVITY_MAGNITUDE) - gs.kpz * r_error.z - gs.kvz * v_error.z;
 
     // Safety-project the desired thrust vector into an upright cone.
     //
@@ -1443,7 +1493,8 @@ VectorN<float, 4> ModeAdaptive::geometricController(Vector3f targetPos,
         thrust_vector_limited = true;
     }
 
-    const float max_tilt_rad = maxTiltDeg * DEG_TO_RAD;
+    const float max_tilt_rad =
+        constrain_float(gs.max_tilt_deg, 5.0f, 60.0f) * DEG_TO_RAD;
     const float horizontal_force =
         sqrtF(desired_body_z_force.x * desired_body_z_force.x +
               desired_body_z_force.y * desired_body_z_force.y);
@@ -1507,9 +1558,9 @@ VectorN<float, 4> ModeAdaptive::geometricController(Vector3f targetPos,
     a_error = e3 * GRAVITY_MAGNITUDE - R.colz() * target_thrust / kg_vehicleMass - targetAcc;
 
     Vector3f target_force_dot; // derivative of target_force
-    target_force_dot.x = -pg.kpx * v_error.x - pg.kvx * a_error.x + kg_vehicleMass * targetJerk.x;
-    target_force_dot.y = -pg.kpy * v_error.y - pg.kvy * a_error.y + kg_vehicleMass * targetJerk.y;
-    target_force_dot.z = -pg.kpz * v_error.z - pg.kvz * a_error.z + kg_vehicleMass * targetJerk.z;
+    target_force_dot.x = -gs.kpx * v_error.x - gs.kvx * a_error.x + kg_vehicleMass * targetJerk.x;
+    target_force_dot.y = -gs.kpy * v_error.y - gs.kvy * a_error.y + kg_vehicleMass * targetJerk.y;
+    target_force_dot.z = -gs.kpz * v_error.z - gs.kvz * a_error.z + kg_vehicleMass * targetJerk.z;
 
     // Once the safety projection is active, the analytical derivative of the
     // unconstrained force no longer represents the constrained command.
@@ -1527,9 +1578,9 @@ VectorN<float, 4> ModeAdaptive::geometricController(Vector3f targetPos,
     j_error = -R.colz() * target_thrust_dot / kg_vehicleMass - b3_dot * target_thrust / kg_vehicleMass - targetJerk;
 
     Vector3f target_force_ddot; // derivative of target_force_dot
-    target_force_ddot.x = -pg.kpx * a_error.x - pg.kvx * j_error.x + kg_vehicleMass * targetSnap.x;
-    target_force_ddot.y = -pg.kpy * a_error.y - pg.kvy * j_error.y + kg_vehicleMass * targetSnap.y;
-    target_force_ddot.z = -pg.kpz * a_error.z - pg.kvz * j_error.z + kg_vehicleMass * targetSnap.z;
+    target_force_ddot.x = -gs.kpx * a_error.x - gs.kvx * j_error.x + kg_vehicleMass * targetSnap.x;
+    target_force_ddot.y = -gs.kpy * a_error.y - gs.kvy * j_error.y + kg_vehicleMass * targetSnap.y;
+    target_force_ddot.z = -gs.kpz * a_error.z - gs.kvz * j_error.z + kg_vehicleMass * targetSnap.z;
 
     if (thrust_vector_limited) {
         target_force_ddot = (Vector3f){0, 0, 0};
@@ -1600,9 +1651,9 @@ VectorN<float, 4> ModeAdaptive::geometricController(Vector3f targetPos,
     ew = Omega - R.transposed() * Rdes * Omegad;
 
     // Compute the moment
-    M.x = -g.GeoCtrl_KRx * eR.x - g.GeoCtrl_KOx * ew.x;
-    M.y = -g.GeoCtrl_KRy * eR.y - g.GeoCtrl_KOy * ew.y;
-    M.z = -g.GeoCtrl_KRz * eR.z - g.GeoCtrl_KOz * ew.z;
+    M.x = -gs.krx * eR.x - gs.kox * ew.x;
+    M.y = -gs.kry * eR.y - gs.koy * ew.y;
+    M.z = -gs.krz * eR.z - gs.koz * ew.z;
     M = M - J * (hatOperator(Omega) * R.transposed() * Rdes * Omegad - R.transposed() * Rdes * Omegad_dot);
     Vector3f momentAdd = Omega % (J * Omega); // J is the inertia matrix
     M = M + momentAdd;
