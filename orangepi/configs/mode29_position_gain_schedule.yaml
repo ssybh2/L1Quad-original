@@ -1,0 +1,83 @@
+# Mode29 position/velocity gain-scheduling calibration profile
+#
+# This profile intentionally schedules ONLY:
+#   GEOCTRL_KPX/KPY/KPZ
+#   GEOCTRL_KVX/KVY/KVZ
+#
+# Attitude/rate gains (KR/KO) and all L1 parameters remain unchanged.
+#
+# M29_GS_MODE:
+#   0 = disabled: milestone behavior, use GEOCTRL_KP*/KV* directly
+#   1 = oracle calibration: use the known injected loss percentage
+#   2 = automatic: use onboard blind-FDI loss estimate
+#
+# Calibration workflow:
+#   1. keep M29_GS_MODE=1
+#   2. tune one loss anchor at a time (50, 60, 70, ...)
+#   3. edit only that anchor's six gains
+#   4. apply while DISARMED
+#   5. inject the matching --loss value and evaluate the BIN log
+#
+# All anchors start equal to the current working position-loop gains so enabling
+# oracle mode is initially behavior-neutral until an anchor is deliberately
+# tuned.
+
+version: 1
+
+profile:
+  name: mode29_position_gain_schedule
+  airframe: softdrone
+  description: Oracle calibration table for Mode29 position-loop gain scheduling.
+  firmware_branch: feature/mode29-position-gain-schedule
+
+parameters:
+  scheduler:
+    M29_GS_MODE: 1
+
+  loss_50:
+    M29_G50_KPX: 4.0
+    M29_G50_KPY: 4.0
+    M29_G50_KPZ: 10.0
+    M29_G50_KVX: 4.0
+    M29_G50_KVY: 4.0
+    M29_G50_KVZ: 2.0
+
+  loss_60:
+    M29_G60_KPX: 4.0
+    M29_G60_KPY: 4.0
+    M29_G60_KPZ: 10.0
+    M29_G60_KVX: 4.0
+    M29_G60_KVY: 4.0
+    M29_G60_KVZ: 2.0
+
+  loss_70:
+    M29_G70_KPX: 4.0
+    M29_G70_KPY: 4.0
+    M29_G70_KPZ: 10.0
+    M29_G70_KVX: 4.0
+    M29_G70_KVY: 4.0
+    M29_G70_KVZ: 2.0
+
+  loss_80:
+    M29_G80_KPX: 4.0
+    M29_G80_KPY: 4.0
+    M29_G80_KPZ: 10.0
+    M29_G80_KVX: 4.0
+    M29_G80_KVY: 4.0
+    M29_G80_KVZ: 2.0
+
+  loss_90:
+    M29_G90_KPX: 4.0
+    M29_G90_KPY: 4.0
+    M29_G90_KPZ: 10.0
+    M29_G90_KVX: 4.0
+    M29_G90_KVY: 4.0
+    M29_G90_KVZ: 2.0
+
+  loss_100:
+    M29_G100_KPX: 4.0
+    M29_G100_KPY: 4.0
+    M29_G100_KPZ: 10.0
+    M29_G100_KVX: 4.0
+    M29_G100_KVY: 4.0
+    M29_G100_KVZ: 2.0
