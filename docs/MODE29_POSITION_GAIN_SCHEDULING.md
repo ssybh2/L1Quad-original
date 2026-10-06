@@ -1,83 +1,93 @@
-# Mode29 Position Gain Scheduling
+# Mode29 Geometric Gain and Tilt Scheduling
 
-## Frozen milestone
+## Frozen milestones
 
-The pre-scheduling controller is frozen on branch:
+The original FDI/recovery controller remains frozen on:
 
 `milestone/mode29-fdi-recovery-20261006`
 
-at commit:
+at:
 
 `ca4a5a44d21b7fa4efa0ad610edd53e470169ac9`
 
-All gain-scheduling work starts from that exact controller state on:
+The first position-only gain-scheduler version is also frozen on:
+
+`milestone/mode29-pos-gainsched-20261006`
+
+at:
+
+`e20ce0b81cd22cadf2bf0edae77a05ccc3d48b4f`
+
+Current development continues on:
 
 `feature/mode29-position-gain-schedule`
 
-## Scope
+## Scheduled quantities
 
-This experiment schedules **only** the translational geometric-controller gains:
+At each 50/60/70/80/90/100 percent motor-loss anchor the scheduler can now set:
 
-- `GEOCTRL_KPX`, `GEOCTRL_KPY`, `GEOCTRL_KPZ`
-- `GEOCTRL_KVX`, `GEOCTRL_KVY`, `GEOCTRL_KVZ`
+- Position gains: `KPX/KPY/KPZ`
+- Velocity gains: `KVX/KVY/KVZ`
+- Attitude gains: `KRX/KRY/KRZ`
+- Angular-rate gains: `KOX/KOY/KOZ`
+- Maximum combined roll/pitch tilt: `TILT` in degrees
 
-The following remain unchanged by the scheduler:
+L1 parameters (`ASV`, `ASOMEGA`, `CTOFFQ*`) are deliberately not scheduled.
 
-- `GEOCTRL_KRX/KRY/KRZ`
-- `GEOCTRL_KOX/KOY/KOZ`
-- `ASV`, `ASOMEGA`
-- `CTOFFQ1THRUST`, `CTOFFQ1MOMENT`, `CTOFFQ2MOMENT`
-- the existing yaw-free and effectiveness-aware allocation logic
+The existing yaw-free and effectiveness-aware allocation logic is unchanged.
 
 ## Scheduler modes
 
-`M29_GS_MODE` selects the scheduling source:
+`M29_GS_MODE` selects the loss source:
 
-- `0`: disabled. The controller is equivalent to the frozen milestone for the position loop.
-- `1`: oracle calibration. The scheduler uses the known injected loss percentage from the test injector.
-- `2`: automatic. The scheduler uses the onboard blind-FDI loss estimate.
+- `0`: disabled. Use normal `GEOCTRL_*` values and `M29_MAX_TILT`.
+- `1`: oracle calibration. Use the known injected loss percentage.
+- `2`: automatic. Use the onboard blind-FDI loss estimate.
 
-Mode 1 exists so that each loss anchor can be tuned without mixing gain-tuning error with FDI estimation error.
+The scheduler low-pass filters and rate-limits the loss before interpolating parameters.
 
-## Gain anchors
+## Anchors and interpolation
 
-Six AP_Param anchor rows are available:
+Each loss anchor uses parameters named like:
 
-- 50%: `M29_G50_KPX ... M29_G50_KVZ`
-- 60%: `M29_G60_KPX ... M29_G60_KVZ`
-- 70%: `M29_G70_KPX ... M29_G70_KVZ`
-- 80%: `M29_G80_KPX ... M29_G80_KVZ`
-- 90%: `M29_G90_KPX ... M29_G90_KVZ`
-- 100%: `M29_G100_KPX ... M29_G100_KVZ`
+`M29_G60_KPX`, `M29_G60_KVY`, `M29_G60_KRX`, `M29_G60_KOY`, `M29_G60_TILT`
 
-Between anchors the firmware uses piecewise-linear interpolation. Below 45% loss, the normal `GEOCTRL_KP*/KV*` values are retained. Between 45% and 50% the controller blends smoothly into the 50% anchor.
+The firmware performs piecewise-linear interpolation between neighboring anchors. Below 45% loss the normal controller is retained. From 45% to 50% it blends smoothly into the 50% anchor.
 
-## Calibration sequence
+## Current calibrated values
 
-Use `orangepi/configs/mode29_position_gain_schedule.yaml` with `M29_GS_MODE=1`.
+The 50% anchor retains the previously validated position gains:
 
-Tune only one anchor row at a time. For example, while calibrating 60% loss, modify only:
+- KP = [4.0, 4.0, 10.0]
+- KV = [4.0, 4.0, 2.0]
 
-`M29_G60_KPX/KPY/KPZ/KVX/KVY/KVZ`
+The 60% anchor currently stores:
 
-Apply the YAML while DISARMED, then inject exactly 60% loss. The normal hover before the fault still uses the baseline `GEOCTRL_KP*/KV*` values.
+- KP = [5.5, 5.5, 10.0]
+- KV = [4.0, 4.0, 2.0]
 
-After 50/60/70% anchors are established, test intermediate values such as 55% and 65% without adding new anchors. This validates whether interpolation generalizes rather than merely reproducing hand-tuned points.
+Until separately tuned, KR/KO and tilt anchors start from the working baseline:
 
-## Automatic mode
+- KR = [1.0, 0.5, 0.25]
+- KO = [0.1, 0.2, 0.1]
+- tilt = 30 deg
 
-After the oracle table is validated, set `M29_GS_MODE=2`.
+## Calibration workflow
 
-The current onboard FDI remains blind to the injector. Its continuous loss estimate is accepted by the scheduler only when the motor-fault signature fit is credible. The scheduled loss is low-pass filtered and rate limited before gains are interpolated.
+Use:
+
+`orangepi/configs/mode29_position_gain_schedule.yaml`
+
+with `M29_GS_MODE=1`.
+
+Tune only the row matching the injected loss. For example, when calibrating 70% loss, change only the `M29_G70_*` parameters. Apply while DISARMED, inject exactly 70%, then evaluate the BIN log.
+
+After neighboring anchors are validated, test intermediate losses such as 55% and 65% without adding anchors. This tests the interpolation itself.
 
 ## Logging
 
-`L1GS` records:
+`L1GS` records scheduler mode, raw/scheduled loss, confidence and active KP/KV values.
 
-- `mode`
-- `raw`: raw loss source
-- `sched`: filtered/rate-limited loss used for interpolation
-- `conf`: scheduler confidence
-- `kpx,kpy,kpz,kvx,kvy,kvz`: actual gains used by the controller
+`L1GA` records active KRX/KRY/KRZ, KOX/KOY/KOZ and scheduled maximum tilt.
 
-Existing `L1FD` remains the FDI diagnostic log.
+`L1FD` remains the fault-detection/isolation diagnostic log.
