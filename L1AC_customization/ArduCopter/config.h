@@ -296,10 +296,10 @@
  #define M29_MAX_TILT_DEFAULT       30.0f
 #endif
 
-// Mode29 position/velocity gain-scheduling defaults. Scheduling is disabled
-// unless M29_GS_MODE is explicitly enabled. Anchor values mirror the current
-// real-airframe working profile so enabling the feature before tuning does not
-// intentionally change the six position-loop gains.
+// Mode29 geometric-controller gain/tilt scheduling defaults. Scheduling is
+// disabled unless M29_GS_MODE is explicitly enabled. Anchor values mirror the
+// current real-airframe working profile so enabling the feature before tuning
+// is behavior-neutral until an anchor is deliberately changed.
 #ifndef M29_GS_MODE_DEFAULT
  #define M29_GS_MODE_DEFAULT        0
 #endif
@@ -320,6 +320,27 @@
 #endif
 #ifndef M29_GS_KVZ_DEFAULT
  #define M29_GS_KVZ_DEFAULT         2.0f
+#endif
+#ifndef M29_GS_KRX_DEFAULT
+ #define M29_GS_KRX_DEFAULT         1.0f
+#endif
+#ifndef M29_GS_KRY_DEFAULT
+ #define M29_GS_KRY_DEFAULT         0.5f
+#endif
+#ifndef M29_GS_KRZ_DEFAULT
+ #define M29_GS_KRZ_DEFAULT         0.25f
+#endif
+#ifndef M29_GS_KOX_DEFAULT
+ #define M29_GS_KOX_DEFAULT         0.1f
+#endif
+#ifndef M29_GS_KOY_DEFAULT
+ #define M29_GS_KOY_DEFAULT         0.2f
+#endif
+#ifndef M29_GS_KOZ_DEFAULT
+ #define M29_GS_KOZ_DEFAULT         0.1f
+#endif
+#ifndef M29_GS_TILT_DEFAULT
+ #define M29_GS_TILT_DEFAULT        30.0f
 #endif
 
 #if !REAL_OR_SITL
