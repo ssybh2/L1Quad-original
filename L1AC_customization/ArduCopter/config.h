@@ -296,6 +296,32 @@
  #define M29_MAX_TILT_DEFAULT       30.0f
 #endif
 
+// Mode29 position/velocity gain-scheduling defaults. Scheduling is disabled
+// unless M29_GS_MODE is explicitly enabled. Anchor values mirror the current
+// real-airframe working profile so enabling the feature before tuning does not
+// intentionally change the six position-loop gains.
+#ifndef M29_GS_MODE_DEFAULT
+ #define M29_GS_MODE_DEFAULT        0
+#endif
+#ifndef M29_GS_KPX_DEFAULT
+ #define M29_GS_KPX_DEFAULT         4.0f
+#endif
+#ifndef M29_GS_KPY_DEFAULT
+ #define M29_GS_KPY_DEFAULT         4.0f
+#endif
+#ifndef M29_GS_KPZ_DEFAULT
+ #define M29_GS_KPZ_DEFAULT         10.0f
+#endif
+#ifndef M29_GS_KVX_DEFAULT
+ #define M29_GS_KVX_DEFAULT         4.0f
+#endif
+#ifndef M29_GS_KVY_DEFAULT
+ #define M29_GS_KVY_DEFAULT         4.0f
+#endif
+#ifndef M29_GS_KVZ_DEFAULT
+ #define M29_GS_KVZ_DEFAULT         2.0f
+#endif
+
 #if !REAL_OR_SITL
 // default ACRL controller parameters (SITL)
 #ifndef GEOCTRL_KPX_DEFAULT
