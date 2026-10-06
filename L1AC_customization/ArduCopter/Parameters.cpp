@@ -648,6 +648,265 @@ const AP_Param::Info Copter::var_info[] = {
     // @Increment: 1
     // @User: Advanced
     GSCALAR(m29_max_tilt, "M29_MAX_TILT", M29_MAX_TILT_DEFAULT),
+
+    // @Param: M29_GS_MODE
+    // @DisplayName: Mode29 position gain-schedule source
+    // @Description: Selects the source used to schedule only GEOCTRL position/velocity gains. 0 disables scheduling and uses GEOCTRL_KP*/KV* directly. 1 uses the injected motor-loss percentage for calibration/oracle testing. 2 uses the onboard FDI loss estimate.
+    // @Values: 0:Disabled,1:OracleInjectedLoss,2:AutomaticFDI
+    // @User: Advanced
+    GSCALAR(m29_gs_mode, "M29_GS_MODE", M29_GS_MODE_DEFAULT),
+
+    // @Param: M29_G50_KPX
+    // @DisplayName: Mode29 50% loss KPX
+    // @Description: Position-loop gain anchor used by Mode29 gain scheduling at 50% estimated motor thrust-effectiveness loss.
+    // @Range: 0 50
+    // @User: Advanced
+    GSCALAR(m29_g50_kpx, "M29_G50_KPX", M29_GS_KPX_DEFAULT),
+
+    // @Param: M29_G50_KPY
+    // @DisplayName: Mode29 50% loss KPY
+    // @Description: Position-loop gain anchor used by Mode29 gain scheduling at 50% estimated motor thrust-effectiveness loss.
+    // @Range: 0 50
+    // @User: Advanced
+    GSCALAR(m29_g50_kpy, "M29_G50_KPY", M29_GS_KPY_DEFAULT),
+
+    // @Param: M29_G50_KPZ
+    // @DisplayName: Mode29 50% loss KPZ
+    // @Description: Position-loop gain anchor used by Mode29 gain scheduling at 50% estimated motor thrust-effectiveness loss.
+    // @Range: 0 50
+    // @User: Advanced
+    GSCALAR(m29_g50_kpz, "M29_G50_KPZ", M29_GS_KPZ_DEFAULT),
+
+    // @Param: M29_G50_KVX
+    // @DisplayName: Mode29 50% loss KVX
+    // @Description: Position-loop gain anchor used by Mode29 gain scheduling at 50% estimated motor thrust-effectiveness loss.
+    // @Range: 0 50
+    // @User: Advanced
+    GSCALAR(m29_g50_kvx, "M29_G50_KVX", M29_GS_KVX_DEFAULT),
+
+    // @Param: M29_G50_KVY
+    // @DisplayName: Mode29 50% loss KVY
+    // @Description: Position-loop gain anchor used by Mode29 gain scheduling at 50% estimated motor thrust-effectiveness loss.
+    // @Range: 0 50
+    // @User: Advanced
+    GSCALAR(m29_g50_kvy, "M29_G50_KVY", M29_GS_KVY_DEFAULT),
+
+    // @Param: M29_G50_KVZ
+    // @DisplayName: Mode29 50% loss KVZ
+    // @Description: Position-loop gain anchor used by Mode29 gain scheduling at 50% estimated motor thrust-effectiveness loss.
+    // @Range: 0 50
+    // @User: Advanced
+    GSCALAR(m29_g50_kvz, "M29_G50_KVZ", M29_GS_KVZ_DEFAULT),
+
+    // @Param: M29_G60_KPX
+    // @DisplayName: Mode29 60% loss KPX
+    // @Description: Position-loop gain anchor used by Mode29 gain scheduling at 60% estimated motor thrust-effectiveness loss.
+    // @Range: 0 50
+    // @User: Advanced
+    GSCALAR(m29_g60_kpx, "M29_G60_KPX", M29_GS_KPX_DEFAULT),
+
+    // @Param: M29_G60_KPY
+    // @DisplayName: Mode29 60% loss KPY
+    // @Description: Position-loop gain anchor used by Mode29 gain scheduling at 60% estimated motor thrust-effectiveness loss.
+    // @Range: 0 50
+    // @User: Advanced
+    GSCALAR(m29_g60_kpy, "M29_G60_KPY", M29_GS_KPY_DEFAULT),
+
+    // @Param: M29_G60_KPZ
+    // @DisplayName: Mode29 60% loss KPZ
+    // @Description: Position-loop gain anchor used by Mode29 gain scheduling at 60% estimated motor thrust-effectiveness loss.
+    // @Range: 0 50
+    // @User: Advanced
+    GSCALAR(m29_g60_kpz, "M29_G60_KPZ", M29_GS_KPZ_DEFAULT),
+
+    // @Param: M29_G60_KVX
+    // @DisplayName: Mode29 60% loss KVX
+    // @Description: Position-loop gain anchor used by Mode29 gain scheduling at 60% estimated motor thrust-effectiveness loss.
+    // @Range: 0 50
+    // @User: Advanced
+    GSCALAR(m29_g60_kvx, "M29_G60_KVX", M29_GS_KVX_DEFAULT),
+
+    // @Param: M29_G60_KVY
+    // @DisplayName: Mode29 60% loss KVY
+    // @Description: Position-loop gain anchor used by Mode29 gain scheduling at 60% estimated motor thrust-effectiveness loss.
+    // @Range: 0 50
+    // @User: Advanced
+    GSCALAR(m29_g60_kvy, "M29_G60_KVY", M29_GS_KVY_DEFAULT),
+
+    // @Param: M29_G60_KVZ
+    // @DisplayName: Mode29 60% loss KVZ
+    // @Description: Position-loop gain anchor used by Mode29 gain scheduling at 60% estimated motor thrust-effectiveness loss.
+    // @Range: 0 50
+    // @User: Advanced
+    GSCALAR(m29_g60_kvz, "M29_G60_KVZ", M29_GS_KVZ_DEFAULT),
+
+    // @Param: M29_G70_KPX
+    // @DisplayName: Mode29 70% loss KPX
+    // @Description: Position-loop gain anchor used by Mode29 gain scheduling at 70% estimated motor thrust-effectiveness loss.
+    // @Range: 0 50
+    // @User: Advanced
+    GSCALAR(m29_g70_kpx, "M29_G70_KPX", M29_GS_KPX_DEFAULT),
+
+    // @Param: M29_G70_KPY
+    // @DisplayName: Mode29 70% loss KPY
+    // @Description: Position-loop gain anchor used by Mode29 gain scheduling at 70% estimated motor thrust-effectiveness loss.
+    // @Range: 0 50
+    // @User: Advanced
+    GSCALAR(m29_g70_kpy, "M29_G70_KPY", M29_GS_KPY_DEFAULT),
+
+    // @Param: M29_G70_KPZ
+    // @DisplayName: Mode29 70% loss KPZ
+    // @Description: Position-loop gain anchor used by Mode29 gain scheduling at 70% estimated motor thrust-effectiveness loss.
+    // @Range: 0 50
+    // @User: Advanced
+    GSCALAR(m29_g70_kpz, "M29_G70_KPZ", M29_GS_KPZ_DEFAULT),
+
+    // @Param: M29_G70_KVX
+    // @DisplayName: Mode29 70% loss KVX
+    // @Description: Position-loop gain anchor used by Mode29 gain scheduling at 70% estimated motor thrust-effectiveness loss.
+    // @Range: 0 50
+    // @User: Advanced
+    GSCALAR(m29_g70_kvx, "M29_G70_KVX", M29_GS_KVX_DEFAULT),
+
+    // @Param: M29_G70_KVY
+    // @DisplayName: Mode29 70% loss KVY
+    // @Description: Position-loop gain anchor used by Mode29 gain scheduling at 70% estimated motor thrust-effectiveness loss.
+    // @Range: 0 50
+    // @User: Advanced
+    GSCALAR(m29_g70_kvy, "M29_G70_KVY", M29_GS_KVY_DEFAULT),
+
+    // @Param: M29_G70_KVZ
+    // @DisplayName: Mode29 70% loss KVZ
+    // @Description: Position-loop gain anchor used by Mode29 gain scheduling at 70% estimated motor thrust-effectiveness loss.
+    // @Range: 0 50
+    // @User: Advanced
+    GSCALAR(m29_g70_kvz, "M29_G70_KVZ", M29_GS_KVZ_DEFAULT),
+
+    // @Param: M29_G80_KPX
+    // @DisplayName: Mode29 80% loss KPX
+    // @Description: Position-loop gain anchor used by Mode29 gain scheduling at 80% estimated motor thrust-effectiveness loss.
+    // @Range: 0 50
+    // @User: Advanced
+    GSCALAR(m29_g80_kpx, "M29_G80_KPX", M29_GS_KPX_DEFAULT),
+
+    // @Param: M29_G80_KPY
+    // @DisplayName: Mode29 80% loss KPY
+    // @Description: Position-loop gain anchor used by Mode29 gain scheduling at 80% estimated motor thrust-effectiveness loss.
+    // @Range: 0 50
+    // @User: Advanced
+    GSCALAR(m29_g80_kpy, "M29_G80_KPY", M29_GS_KPY_DEFAULT),
+
+    // @Param: M29_G80_KPZ
+    // @DisplayName: Mode29 80% loss KPZ
+    // @Description: Position-loop gain anchor used by Mode29 gain scheduling at 80% estimated motor thrust-effectiveness loss.
+    // @Range: 0 50
+    // @User: Advanced
+    GSCALAR(m29_g80_kpz, "M29_G80_KPZ", M29_GS_KPZ_DEFAULT),
+
+    // @Param: M29_G80_KVX
+    // @DisplayName: Mode29 80% loss KVX
+    // @Description: Position-loop gain anchor used by Mode29 gain scheduling at 80% estimated motor thrust-effectiveness loss.
+    // @Range: 0 50
+    // @User: Advanced
+    GSCALAR(m29_g80_kvx, "M29_G80_KVX", M29_GS_KVX_DEFAULT),
+
+    // @Param: M29_G80_KVY
+    // @DisplayName: Mode29 80% loss KVY
+    // @Description: Position-loop gain anchor used by Mode29 gain scheduling at 80% estimated motor thrust-effectiveness loss.
+    // @Range: 0 50
+    // @User: Advanced
+    GSCALAR(m29_g80_kvy, "M29_G80_KVY", M29_GS_KVY_DEFAULT),
+
+    // @Param: M29_G80_KVZ
+    // @DisplayName: Mode29 80% loss KVZ
+    // @Description: Position-loop gain anchor used by Mode29 gain scheduling at 80% estimated motor thrust-effectiveness loss.
+    // @Range: 0 50
+    // @User: Advanced
+    GSCALAR(m29_g80_kvz, "M29_G80_KVZ", M29_GS_KVZ_DEFAULT),
+
+    // @Param: M29_G90_KPX
+    // @DisplayName: Mode29 90% loss KPX
+    // @Description: Position-loop gain anchor used by Mode29 gain scheduling at 90% estimated motor thrust-effectiveness loss.
+    // @Range: 0 50
+    // @User: Advanced
+    GSCALAR(m29_g90_kpx, "M29_G90_KPX", M29_GS_KPX_DEFAULT),
+
+    // @Param: M29_G90_KPY
+    // @DisplayName: Mode29 90% loss KPY
+    // @Description: Position-loop gain anchor used by Mode29 gain scheduling at 90% estimated motor thrust-effectiveness loss.
+    // @Range: 0 50
+    // @User: Advanced
+    GSCALAR(m29_g90_kpy, "M29_G90_KPY", M29_GS_KPY_DEFAULT),
+
+    // @Param: M29_G90_KPZ
+    // @DisplayName: Mode29 90% loss KPZ
+    // @Description: Position-loop gain anchor used by Mode29 gain scheduling at 90% estimated motor thrust-effectiveness loss.
+    // @Range: 0 50
+    // @User: Advanced
+    GSCALAR(m29_g90_kpz, "M29_G90_KPZ", M29_GS_KPZ_DEFAULT),
+
+    // @Param: M29_G90_KVX
+    // @DisplayName: Mode29 90% loss KVX
+    // @Description: Position-loop gain anchor used by Mode29 gain scheduling at 90% estimated motor thrust-effectiveness loss.
+    // @Range: 0 50
+    // @User: Advanced
+    GSCALAR(m29_g90_kvx, "M29_G90_KVX", M29_GS_KVX_DEFAULT),
+
+    // @Param: M29_G90_KVY
+    // @DisplayName: Mode29 90% loss KVY
+    // @Description: Position-loop gain anchor used by Mode29 gain scheduling at 90% estimated motor thrust-effectiveness loss.
+    // @Range: 0 50
+    // @User: Advanced
+    GSCALAR(m29_g90_kvy, "M29_G90_KVY", M29_GS_KVY_DEFAULT),
+
+    // @Param: M29_G90_KVZ
+    // @DisplayName: Mode29 90% loss KVZ
+    // @Description: Position-loop gain anchor used by Mode29 gain scheduling at 90% estimated motor thrust-effectiveness loss.
+    // @Range: 0 50
+    // @User: Advanced
+    GSCALAR(m29_g90_kvz, "M29_G90_KVZ", M29_GS_KVZ_DEFAULT),
+
+    // @Param: M29_G100_KPX
+    // @DisplayName: Mode29 100% loss KPX
+    // @Description: Position-loop gain anchor used by Mode29 gain scheduling at 100% estimated motor thrust-effectiveness loss.
+    // @Range: 0 50
+    // @User: Advanced
+    GSCALAR(m29_g100_kpx, "M29_G100_KPX", M29_GS_KPX_DEFAULT),
+
+    // @Param: M29_G100_KPY
+    // @DisplayName: Mode29 100% loss KPY
+    // @Description: Position-loop gain anchor used by Mode29 gain scheduling at 100% estimated motor thrust-effectiveness loss.
+    // @Range: 0 50
+    // @User: Advanced
+    GSCALAR(m29_g100_kpy, "M29_G100_KPY", M29_GS_KPY_DEFAULT),
+
+    // @Param: M29_G100_KPZ
+    // @DisplayName: Mode29 100% loss KPZ
+    // @Description: Position-loop gain anchor used by Mode29 gain scheduling at 100% estimated motor thrust-effectiveness loss.
+    // @Range: 0 50
+    // @User: Advanced
+    GSCALAR(m29_g100_kpz, "M29_G100_KPZ", M29_GS_KPZ_DEFAULT),
+
+    // @Param: M29_G100_KVX
+    // @DisplayName: Mode29 100% loss KVX
+    // @Description: Position-loop gain anchor used by Mode29 gain scheduling at 100% estimated motor thrust-effectiveness loss.
+    // @Range: 0 50
+    // @User: Advanced
+    GSCALAR(m29_g100_kvx, "M29_G100_KVX", M29_GS_KVX_DEFAULT),
+
+    // @Param: M29_G100_KVY
+    // @DisplayName: Mode29 100% loss KVY
+    // @Description: Position-loop gain anchor used by Mode29 gain scheduling at 100% estimated motor thrust-effectiveness loss.
+    // @Range: 0 50
+    // @User: Advanced
+    GSCALAR(m29_g100_kvy, "M29_G100_KVY", M29_GS_KVY_DEFAULT),
+
+    // @Param: M29_G100_KVZ
+    // @DisplayName: Mode29 100% loss KVZ
+    // @Description: Position-loop gain anchor used by Mode29 gain scheduling at 100% estimated motor thrust-effectiveness loss.
+    // @Range: 0 50
+    // @User: Advanced
+    GSCALAR(m29_g100_kvz, "M29_G100_KVZ", M29_GS_KVZ_DEFAULT),
 #endif
 
     // ACRO_RP_EXPO moved to Command Model class
