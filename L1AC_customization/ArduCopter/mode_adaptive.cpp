@@ -1634,6 +1634,80 @@ VectorN<float, 4> ModeAdaptive::motorMixingYawFree(VectorN<float, 4> thrustMomen
     return w;
 }
 
+VectorN<float, 4> ModeAdaptive::motorMixingYawFreeFaultAware(
+    VectorN<float, 4> thrustMomentCmd,
+    uint8_t failed_motor_id)
+{
+    // Once blind FDI has isolated a severe motor fault, solve only for total
+    // thrust, roll moment and pitch moment with the failed actuator fixed at
+    // zero.  Yaw torque is deliberately unconstrained; the vehicle is allowed
+    // to spin while preserving the reduced attitude objectives.
+#if (!REAL_OR_SITL)
+    const float L = 0.25f;
+    const float D = 0.25f;
+    const float a_F = 0.0014597f;
+    const float b_F = 0.043693f;
+#elif (REAL_OR_SITL)
+    const float L = 0.28f;
+    const float D = 0.28f;
+#endif
+
+    const float F = thrustMomentCmd[0];
+    const float Mx = thrustMomentCmd[1];
+    const float My = thrustMomentCmd[2];
+
+    VectorN<float, 4> motorThrust;
+    mode29_zero(motorThrust);
+
+    switch (failed_motor_id) {
+    case 1:
+        motorThrust[0] = 0.0f;
+        motorThrust[1] = Mx / L - My / D;
+        motorThrust[2] = 0.5f * F + My / D;
+        motorThrust[3] = 0.5f * F - Mx / L;
+        break;
+    case 2:
+        motorThrust[0] = My / D - Mx / L;
+        motorThrust[1] = 0.0f;
+        motorThrust[2] = 0.5f * F + Mx / L;
+        motorThrust[3] = 0.5f * F - My / D;
+        break;
+    case 3:
+        motorThrust[0] = 0.5f * F + My / D;
+        motorThrust[1] = 0.5f * F + Mx / L;
+        motorThrust[2] = 0.0f;
+        motorThrust[3] = -Mx / L - My / D;
+        break;
+    case 4:
+        motorThrust[0] = 0.5f * F - Mx / L;
+        motorThrust[1] = 0.5f * F - My / D;
+        motorThrust[2] = Mx / L + My / D;
+        motorThrust[3] = 0.0f;
+        break;
+    default:
+        return motorMixingYawFree(thrustMomentCmd);
+    }
+
+    VectorN<float, 4> w;
+    for (uint8_t i = 0; i < 4; i++) {
+        if ((i + 1U) == failed_motor_id) {
+            w[i] = 0.0f;
+            continue;
+        }
+
+        const float fi = MAX(0.0f, motorThrust[i]);
+#if (!REAL_OR_SITL)
+        const float disc = b_F * b_F + 4.0f * a_F * fi;
+        w[i] = (-b_F + sqrtF(MAX(0.0f, disc))) / (2.0f * a_F);
+#elif (REAL_OR_SITL)
+        w[i] = softdrone_w_from_thrust(fi);
+#endif
+        w[i] = constrain_float(w[i], 0.0f, 100.0f);
+    }
+
+    return w;
+}
+
 VectorN<float, 4> ModeAdaptive::motorMixing(VectorN<float, 4> thrustMomentCmd)
 {
     VectorN<float, 4> w;
