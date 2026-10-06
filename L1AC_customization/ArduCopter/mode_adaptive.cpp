@@ -360,6 +360,7 @@ bool ModeAdaptive::motor_degradation_command_fresh(uint32_t now_ms) const
 void ModeAdaptive::clear_auto_motor_fault()
 {
     motor_fault_confirmed = false;
+    motor_fault_yaw_free_latched = false;
     motor_fault_detected_id = 0;
     motor_fault_candidate_id = 0;
     motor_fault_confirm_count = 0;
@@ -651,6 +652,7 @@ void ModeAdaptive::update_auto_motor_fault_detector(float time_in_this_run)
 
     if (motor_fault_confirm_count >= MOTOR_FDI_CONFIRM_SAMPLES) {
         motor_fault_confirmed = true;
+        motor_fault_yaw_free_latched = true;
         motor_fault_detected_id = best_motor;
         motor_fault_recovery_count = 0;
         GCS_SEND_TEXT(MAV_SEVERITY_CRITICAL,
@@ -973,7 +975,7 @@ void ModeAdaptive::run()
     update_auto_motor_fault_detector(timeInThisRun);
 
     const bool yaw_free_active =
-        motor_fault_confirmed ||
+        motor_fault_yaw_free_latched ||
         (motor_degradation_active && motor_degradation_yaw_free);
 
     if (yaw_free_active) {
