@@ -4,7 +4,7 @@
 This is the unified Orange Pi tuning tool for the Softdrone experiment.
 
 Supported groups:
-- Mode 29 custom geometric/L1 controller parameters.
+- Mode 29 custom geometric/L1 controller parameters, including loss-scheduled KP/KV/KR/KO gains and maximum tilt.
 - ArduCopter attitude/rate parameters used by STABILIZE and other normal
   ArduCopter attitude-controlled modes.
 
@@ -94,6 +94,48 @@ MODE29_PARAMS = {
     "M29_G100_KVX",
     "M29_G100_KVY",
     "M29_G100_KVZ",
+    "M29_G50_KRX",
+    "M29_G50_KRY",
+    "M29_G50_KRZ",
+    "M29_G50_KOX",
+    "M29_G50_KOY",
+    "M29_G50_KOZ",
+    "M29_G50_TILT",
+    "M29_G60_KRX",
+    "M29_G60_KRY",
+    "M29_G60_KRZ",
+    "M29_G60_KOX",
+    "M29_G60_KOY",
+    "M29_G60_KOZ",
+    "M29_G60_TILT",
+    "M29_G70_KRX",
+    "M29_G70_KRY",
+    "M29_G70_KRZ",
+    "M29_G70_KOX",
+    "M29_G70_KOY",
+    "M29_G70_KOZ",
+    "M29_G70_TILT",
+    "M29_G80_KRX",
+    "M29_G80_KRY",
+    "M29_G80_KRZ",
+    "M29_G80_KOX",
+    "M29_G80_KOY",
+    "M29_G80_KOZ",
+    "M29_G80_TILT",
+    "M29_G90_KRX",
+    "M29_G90_KRY",
+    "M29_G90_KRZ",
+    "M29_G90_KOX",
+    "M29_G90_KOY",
+    "M29_G90_KOZ",
+    "M29_G90_TILT",
+    "M29_G100_KRX",
+    "M29_G100_KRY",
+    "M29_G100_KRZ",
+    "M29_G100_KOX",
+    "M29_G100_KOY",
+    "M29_G100_KOZ",
+    "M29_G100_TILT",
 }
 
 ARDUCOPTER_ATTITUDE_PARAMS = {
@@ -279,6 +321,91 @@ def load_profile(path):
         raise ValueError("M29_G100_KVY must be in [0, 50]")
     if "M29_G100_KVZ" in requested and not (0.0 <= requested["M29_G100_KVZ"] <= 50.0):
         raise ValueError("M29_G100_KVZ must be in [0, 50]")
+
+    if "M29_G50_KRX" in requested and not (0.0 <= requested["M29_G50_KRX"] <= 20.0):
+        raise ValueError("M29_G50_KRX must be in [0, 20]")
+    if "M29_G50_KRY" in requested and not (0.0 <= requested["M29_G50_KRY"] <= 20.0):
+        raise ValueError("M29_G50_KRY must be in [0, 20]")
+    if "M29_G50_KRZ" in requested and not (0.0 <= requested["M29_G50_KRZ"] <= 20.0):
+        raise ValueError("M29_G50_KRZ must be in [0, 20]")
+    if "M29_G50_KOX" in requested and not (0.0 <= requested["M29_G50_KOX"] <= 20.0):
+        raise ValueError("M29_G50_KOX must be in [0, 20]")
+    if "M29_G50_KOY" in requested and not (0.0 <= requested["M29_G50_KOY"] <= 20.0):
+        raise ValueError("M29_G50_KOY must be in [0, 20]")
+    if "M29_G50_KOZ" in requested and not (0.0 <= requested["M29_G50_KOZ"] <= 20.0):
+        raise ValueError("M29_G50_KOZ must be in [0, 20]")
+    if "M29_G50_TILT" in requested and not (5.0 <= requested["M29_G50_TILT"] <= 60.0):
+        raise ValueError("M29_G50_TILT must be in [5, 60] deg")
+    if "M29_G60_KRX" in requested and not (0.0 <= requested["M29_G60_KRX"] <= 20.0):
+        raise ValueError("M29_G60_KRX must be in [0, 20]")
+    if "M29_G60_KRY" in requested and not (0.0 <= requested["M29_G60_KRY"] <= 20.0):
+        raise ValueError("M29_G60_KRY must be in [0, 20]")
+    if "M29_G60_KRZ" in requested and not (0.0 <= requested["M29_G60_KRZ"] <= 20.0):
+        raise ValueError("M29_G60_KRZ must be in [0, 20]")
+    if "M29_G60_KOX" in requested and not (0.0 <= requested["M29_G60_KOX"] <= 20.0):
+        raise ValueError("M29_G60_KOX must be in [0, 20]")
+    if "M29_G60_KOY" in requested and not (0.0 <= requested["M29_G60_KOY"] <= 20.0):
+        raise ValueError("M29_G60_KOY must be in [0, 20]")
+    if "M29_G60_KOZ" in requested and not (0.0 <= requested["M29_G60_KOZ"] <= 20.0):
+        raise ValueError("M29_G60_KOZ must be in [0, 20]")
+    if "M29_G60_TILT" in requested and not (5.0 <= requested["M29_G60_TILT"] <= 60.0):
+        raise ValueError("M29_G60_TILT must be in [5, 60] deg")
+    if "M29_G70_KRX" in requested and not (0.0 <= requested["M29_G70_KRX"] <= 20.0):
+        raise ValueError("M29_G70_KRX must be in [0, 20]")
+    if "M29_G70_KRY" in requested and not (0.0 <= requested["M29_G70_KRY"] <= 20.0):
+        raise ValueError("M29_G70_KRY must be in [0, 20]")
+    if "M29_G70_KRZ" in requested and not (0.0 <= requested["M29_G70_KRZ"] <= 20.0):
+        raise ValueError("M29_G70_KRZ must be in [0, 20]")
+    if "M29_G70_KOX" in requested and not (0.0 <= requested["M29_G70_KOX"] <= 20.0):
+        raise ValueError("M29_G70_KOX must be in [0, 20]")
+    if "M29_G70_KOY" in requested and not (0.0 <= requested["M29_G70_KOY"] <= 20.0):
+        raise ValueError("M29_G70_KOY must be in [0, 20]")
+    if "M29_G70_KOZ" in requested and not (0.0 <= requested["M29_G70_KOZ"] <= 20.0):
+        raise ValueError("M29_G70_KOZ must be in [0, 20]")
+    if "M29_G70_TILT" in requested and not (5.0 <= requested["M29_G70_TILT"] <= 60.0):
+        raise ValueError("M29_G70_TILT must be in [5, 60] deg")
+    if "M29_G80_KRX" in requested and not (0.0 <= requested["M29_G80_KRX"] <= 20.0):
+        raise ValueError("M29_G80_KRX must be in [0, 20]")
+    if "M29_G80_KRY" in requested and not (0.0 <= requested["M29_G80_KRY"] <= 20.0):
+        raise ValueError("M29_G80_KRY must be in [0, 20]")
+    if "M29_G80_KRZ" in requested and not (0.0 <= requested["M29_G80_KRZ"] <= 20.0):
+        raise ValueError("M29_G80_KRZ must be in [0, 20]")
+    if "M29_G80_KOX" in requested and not (0.0 <= requested["M29_G80_KOX"] <= 20.0):
+        raise ValueError("M29_G80_KOX must be in [0, 20]")
+    if "M29_G80_KOY" in requested and not (0.0 <= requested["M29_G80_KOY"] <= 20.0):
+        raise ValueError("M29_G80_KOY must be in [0, 20]")
+    if "M29_G80_KOZ" in requested and not (0.0 <= requested["M29_G80_KOZ"] <= 20.0):
+        raise ValueError("M29_G80_KOZ must be in [0, 20]")
+    if "M29_G80_TILT" in requested and not (5.0 <= requested["M29_G80_TILT"] <= 60.0):
+        raise ValueError("M29_G80_TILT must be in [5, 60] deg")
+    if "M29_G90_KRX" in requested and not (0.0 <= requested["M29_G90_KRX"] <= 20.0):
+        raise ValueError("M29_G90_KRX must be in [0, 20]")
+    if "M29_G90_KRY" in requested and not (0.0 <= requested["M29_G90_KRY"] <= 20.0):
+        raise ValueError("M29_G90_KRY must be in [0, 20]")
+    if "M29_G90_KRZ" in requested and not (0.0 <= requested["M29_G90_KRZ"] <= 20.0):
+        raise ValueError("M29_G90_KRZ must be in [0, 20]")
+    if "M29_G90_KOX" in requested and not (0.0 <= requested["M29_G90_KOX"] <= 20.0):
+        raise ValueError("M29_G90_KOX must be in [0, 20]")
+    if "M29_G90_KOY" in requested and not (0.0 <= requested["M29_G90_KOY"] <= 20.0):
+        raise ValueError("M29_G90_KOY must be in [0, 20]")
+    if "M29_G90_KOZ" in requested and not (0.0 <= requested["M29_G90_KOZ"] <= 20.0):
+        raise ValueError("M29_G90_KOZ must be in [0, 20]")
+    if "M29_G90_TILT" in requested and not (5.0 <= requested["M29_G90_TILT"] <= 60.0):
+        raise ValueError("M29_G90_TILT must be in [5, 60] deg")
+    if "M29_G100_KRX" in requested and not (0.0 <= requested["M29_G100_KRX"] <= 20.0):
+        raise ValueError("M29_G100_KRX must be in [0, 20]")
+    if "M29_G100_KRY" in requested and not (0.0 <= requested["M29_G100_KRY"] <= 20.0):
+        raise ValueError("M29_G100_KRY must be in [0, 20]")
+    if "M29_G100_KRZ" in requested and not (0.0 <= requested["M29_G100_KRZ"] <= 20.0):
+        raise ValueError("M29_G100_KRZ must be in [0, 20]")
+    if "M29_G100_KOX" in requested and not (0.0 <= requested["M29_G100_KOX"] <= 20.0):
+        raise ValueError("M29_G100_KOX must be in [0, 20]")
+    if "M29_G100_KOY" in requested and not (0.0 <= requested["M29_G100_KOY"] <= 20.0):
+        raise ValueError("M29_G100_KOY must be in [0, 20]")
+    if "M29_G100_KOZ" in requested and not (0.0 <= requested["M29_G100_KOZ"] <= 20.0):
+        raise ValueError("M29_G100_KOZ must be in [0, 20]")
+    if "M29_G100_TILT" in requested and not (5.0 <= requested["M29_G100_TILT"] <= 60.0):
+        raise ValueError("M29_G100_TILT must be in [5, 60] deg")
 
     return document, requested
 
