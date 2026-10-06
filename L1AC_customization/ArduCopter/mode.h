@@ -2030,6 +2030,7 @@ private:
     // Automatic blind fault-detection/isolation state. A confirmed motor id
     // is latched until Mode 29 exits or the vehicle disarms.
     bool motor_fault_confirmed = false;
+    bool motor_fault_yaw_free_latched = false;
     uint8_t motor_fault_detected_id = 0;
     uint8_t motor_fault_candidate_id = 0;
     uint16_t motor_fault_confirm_count = 0;
