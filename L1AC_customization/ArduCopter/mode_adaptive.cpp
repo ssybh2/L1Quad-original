@@ -609,7 +609,7 @@ void ModeAdaptive::run()
     // untouched:
     //   RC9  : <=1200 disable, >=1800 enable
     //   RC10 : motor selector (1..4)
-    //   RC11 : 1000..2000 => 0..30% thrust-effectiveness loss
+    //   RC11 : 1000..2000 => 0..100% thrust-effectiveness loss
     //   RC12 : <=1200 keep yaw control, >=1800 yaw-free mode
     RC_Channel *deg_enable_ch = rc().channel(8);
     RC_Channel *deg_motor_ch = rc().channel(9);
