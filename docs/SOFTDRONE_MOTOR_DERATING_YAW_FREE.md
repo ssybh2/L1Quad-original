@@ -19,7 +19,7 @@ The firmware reads MAVLink2 `RC_CHANNELS_OVERRIDE` on RC9..RC12. The normal pilo
 | --- | --- | --- |
 | RC9 | enable | 1000=off, 2000=on |
 | RC10 | motor | <1250=M1, 1250..1499=M2, 1500..1749=M3, >=1750=M4 |
-| RC11 | thrust loss | 1000=0%, 2000=30% |
+| RC11 | thrust loss | 1000=0%, 2000=100% |
 | RC12 | yaw policy | 1000=fixed yaw, 2000=yaw-free |
 
 All four channels must have an active MAVLink override. If any override disappears, Mode 29 clears the derating state.
