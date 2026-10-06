@@ -463,6 +463,51 @@ public:
         k_param_m29_g100_kvy,
         k_param_m29_g100_kvz,
 
+        // Mode29 attitude/rate gains and maximum tilt scheduled at the same
+        // 50/60/70/80/90/100 percent motor-loss anchors.
+        k_param_m29_g50_krx,
+        k_param_m29_g50_kry,
+        k_param_m29_g50_krz,
+        k_param_m29_g50_kox,
+        k_param_m29_g50_koy,
+        k_param_m29_g50_koz,
+        k_param_m29_g50_tilt,
+        k_param_m29_g60_krx,
+        k_param_m29_g60_kry,
+        k_param_m29_g60_krz,
+        k_param_m29_g60_kox,
+        k_param_m29_g60_koy,
+        k_param_m29_g60_koz,
+        k_param_m29_g60_tilt,
+        k_param_m29_g70_krx,
+        k_param_m29_g70_kry,
+        k_param_m29_g70_krz,
+        k_param_m29_g70_kox,
+        k_param_m29_g70_koy,
+        k_param_m29_g70_koz,
+        k_param_m29_g70_tilt,
+        k_param_m29_g80_krx,
+        k_param_m29_g80_kry,
+        k_param_m29_g80_krz,
+        k_param_m29_g80_kox,
+        k_param_m29_g80_koy,
+        k_param_m29_g80_koz,
+        k_param_m29_g80_tilt,
+        k_param_m29_g90_krx,
+        k_param_m29_g90_kry,
+        k_param_m29_g90_krz,
+        k_param_m29_g90_kox,
+        k_param_m29_g90_koy,
+        k_param_m29_g90_koz,
+        k_param_m29_g90_tilt,
+        k_param_m29_g100_krx,
+        k_param_m29_g100_kry,
+        k_param_m29_g100_krz,
+        k_param_m29_g100_kox,
+        k_param_m29_g100_koy,
+        k_param_m29_g100_koz,
+        k_param_m29_g100_tilt,
+
         // the k_param_* space is 9-bits in size
         // 511: reserved
     };
@@ -576,7 +621,7 @@ public:
     AP_Float m29_settle_time;  // wait after takeoff before fault injection, s
     AP_Float m29_max_tilt;     // maximum commanded combined roll/pitch tilt, deg
 
-    // Mode29 position/velocity gain scheduling.
+    // Mode29 geometric-controller gain/tilt scheduling.
     // 0=disabled, 1=oracle calibration from injected loss, 2=automatic from FDI.
     AP_Int8 m29_gs_mode;
 
@@ -621,6 +666,54 @@ public:
     AP_Float m29_g100_kvx;
     AP_Float m29_g100_kvy;
     AP_Float m29_g100_kvz;
+
+    AP_Float m29_g50_krx;
+    AP_Float m29_g50_kry;
+    AP_Float m29_g50_krz;
+    AP_Float m29_g50_kox;
+    AP_Float m29_g50_koy;
+    AP_Float m29_g50_koz;
+    AP_Float m29_g50_tilt;
+
+    AP_Float m29_g60_krx;
+    AP_Float m29_g60_kry;
+    AP_Float m29_g60_krz;
+    AP_Float m29_g60_kox;
+    AP_Float m29_g60_koy;
+    AP_Float m29_g60_koz;
+    AP_Float m29_g60_tilt;
+
+    AP_Float m29_g70_krx;
+    AP_Float m29_g70_kry;
+    AP_Float m29_g70_krz;
+    AP_Float m29_g70_kox;
+    AP_Float m29_g70_koy;
+    AP_Float m29_g70_koz;
+    AP_Float m29_g70_tilt;
+
+    AP_Float m29_g80_krx;
+    AP_Float m29_g80_kry;
+    AP_Float m29_g80_krz;
+    AP_Float m29_g80_kox;
+    AP_Float m29_g80_koy;
+    AP_Float m29_g80_koz;
+    AP_Float m29_g80_tilt;
+
+    AP_Float m29_g90_krx;
+    AP_Float m29_g90_kry;
+    AP_Float m29_g90_krz;
+    AP_Float m29_g90_kox;
+    AP_Float m29_g90_koy;
+    AP_Float m29_g90_koz;
+    AP_Float m29_g90_tilt;
+
+    AP_Float m29_g100_krx;
+    AP_Float m29_g100_kry;
+    AP_Float m29_g100_krz;
+    AP_Float m29_g100_kox;
+    AP_Float m29_g100_koy;
+    AP_Float m29_g100_koz;
+    AP_Float m29_g100_tilt;
 
 #if MODE_THROW_ENABLED == ENABLED
     AP_Enum<ModeThrow::PreThrowMotorState>         throw_motor_start;
