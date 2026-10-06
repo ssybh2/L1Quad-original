@@ -221,10 +221,22 @@ python3 orangepi/motor_derating_control.py enable \
 ```
 
 The current onboard detector is intentionally conservative: it is aimed at
-severe loss, requires a consistent motor signature for about 60 ms, and latches
-the detected motor until Mode29 exits or the vehicle disarms. DataFlash `L1FD`
-records detector state, isolated motor, candidate, confirmation count,
-estimated loss, residual score, and the three matched-moment estimates.
+severe loss and requires a consistent motor signature for about 60 ms before
+confirmation. After confirmation, Mode29 no longer forces the isolated motor
+to zero unless the estimated loss is actually 100%. Instead, the reduced-
+attitude allocator uses the estimated effectiveness of that motor together
+with the three healthy motors.
+
+The confirmed loss estimate continues adapting online. If the actuator
+recovers and the estimated loss remains below 35% for about 100 ms, that motor
+automatically rejoins the normal four-motor yaw-free allocator. Yaw remains
+released for the rest of the current Mode29 run to avoid an abrupt heading
+recapture while the vehicle may still be spinning; exiting Mode29 or disarming
+clears that latch.
+
+DataFlash `L1FD` records detector state, isolated motor, candidate,
+confirmation count, recovery count, estimated loss, residual score, and the
+three matched-moment estimates.
 
 Immediately release RC9..RC12 overrides:
 
