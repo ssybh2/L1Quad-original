@@ -2197,7 +2197,7 @@ VectorN<float, 4> ModeAdaptive::motorMixingYawFreeEffectivenessAware(
 
     const float y0 = inv00 * F + inv01 * Mx + inv02 * My;
     const float y1 = inv01 * F + inv11 * Mx + inv12 * My;
-    const float y2 = inv02 * F + inv12 * My + inv22 * My;
+    const float y2 = inv02 * F + inv12 * Mx + inv22 * My;
 
     float f_cmd[4];
     for (uint8_t i = 0; i < 4; i++) {
