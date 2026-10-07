@@ -1949,7 +1949,11 @@ public:
     static constexpr uint16_t MOTOR_FDI_RECOVER_SAMPLES = 40U;       // ~100 ms at 400 Hz
     static constexpr uint16_t MOTOR_FDI_POST_CONFIRM_SETTLE_SAMPLES = 40U; // ~100 ms
     static constexpr uint16_t MOTOR_FDI_UPDATE_DIRECTION_SAMPLES = 4U;     // ~10 ms
+    static constexpr uint16_t MOTOR_FDI_CANDIDATE_RELEASE_SAMPLES = 12U;   // ~30 ms
     static constexpr float MOTOR_FDI_MIN_LOSS_FRACTION = 0.60f;
+    static constexpr float MOTOR_FDI_CANDIDATE_PROTECTION_LOSS_FRACTION = 0.60f;
+    static constexpr float MOTOR_FDI_CANDIDATE_RELEASE_LOSS_FRACTION = 0.50f;
+    static constexpr float MOTOR_FDI_CANDIDATE_LOSS_FILTER_ALPHA = 0.12f;
     static constexpr float MOTOR_FDI_RELEASE_LOSS_FRACTION = 0.35f;
     static constexpr float MOTOR_FDI_MAX_RESIDUAL_RATIO = 0.35f;
     static constexpr float MOTOR_FDI_CONFIRMED_MAX_RESIDUAL_RATIO = 0.55f;
@@ -2047,11 +2051,14 @@ private:
     uint8_t motor_fault_detected_id = 0;
     uint8_t motor_fault_candidate_id = 0;
     uint16_t motor_fault_confirm_count = 0;
+    uint16_t motor_fault_candidate_release_count = 0;
     uint16_t motor_fault_recovery_count = 0;
     uint16_t motor_fault_post_confirm_settle_count = 0;
     int8_t motor_fault_update_direction = 0;
     uint16_t motor_fault_update_direction_count = 0;
     float motor_fault_loss_estimate_pct = 0.0f;
+    float motor_fault_candidate_loss_raw_pct = 0.0f;
+    float motor_fault_candidate_loss_filtered_pct = 0.0f;
     float motor_fault_residual_ratio = 1.0f;
     Vector3f motor_fault_sigma_filtered;
     Vector3f motor_fault_sigma_baseline;
