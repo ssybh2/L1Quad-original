@@ -21,12 +21,25 @@ As soon as a severe candidate exists, Mode29 now:
 - switches to true reduced-attitude control based on desired thrust direction;
 - controls F/Mx/My as the primary wrench;
 - requests only secondary yaw-rate damping;
-- immediately uses the candidate motor ID and current blind severity estimate
-  in the effectiveness-aware reduced allocator.
+- immediately uses the candidate motor ID in the effectiveness-aware reduced allocator;
+- deliberately uses a fixed **60% provisional loss** during Candidate instead of
+  feeding the instantaneous blind severity directly into the allocator.
 
-Formal confirmation now only latches the diagnosis. It no longer gates protective
-allocation: the first severe-candidate cycle already changes actuator effectiveness
-for F/Mx/My allocation while confirmation continues independently.
+Motor identity and severity are therefore separated. The first severe-candidate
+cycle is actionable for protection, but a one-cycle 90..100% severity spike cannot
+make a real ~60% fault look like a nearly dead motor to the allocator.
+
+Candidate entry remains at 60% loss evidence. An already-active Candidate is held
+while same-motor evidence remains above 50%, and weak/contradictory evidence must
+persist for about 30 ms before Candidate protection is released. This 60%/50%
+hysteresis prevents control-structure chatter around the 60% boundary.
+
+The raw Candidate severity is logged separately and low-pass filtered only for
+initialising the continuous severity estimate after formal confirmation. The
+Candidate allocator itself remains fixed at the 60% provisional protection level.
+
+Formal confirmation still latches the diagnosis after the existing confirmation
+window; it no longer gates the start of protective control allocation.
 
 ### Confirmed fault
 
@@ -98,6 +111,13 @@ New `L1FQ` records:
 - `dcnt`: consecutive correction-direction samples
 - `conf`: gain-scheduler confidence
 
+New `L1FC` records Candidate-specific diagnostics:
+
+- `release`: consecutive weak-evidence samples toward Candidate release
+- `raw`: instantaneous blind Candidate severity
+- `filt`: filtered Candidate severity used only to initialise Confirmed severity
+- `protect`: provisional allocator severity (60%)
+
 New `L1RA` records reduced-attitude tilt errors, body-z rate and yaw damping
 moment request.
 
@@ -111,7 +131,7 @@ Recommended order:
 2. SITL/HIL regression;
 3. propellers removed: parameter/configuration and state-transition checks;
 4. fixed thrust stand / restrained airframe;
-5. progressively test 80%, 90%, 95%, 100% injection;
+5. progressively test 60%, 70%, 80%, 90%, 95%, 100% injection;
 6. recovery tests;
 7. repeat all motor IDs and different thrust levels;
 8. add voltage sag, actuator lag/model mismatch and IMU vibration/noise;
