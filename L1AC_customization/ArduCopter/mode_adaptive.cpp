@@ -555,7 +555,13 @@ void ModeAdaptive::update_gain_schedule(bool motor_degradation_active)
         if (motor_fault_confirmed &&
             isfinite(motor_fault_loss_estimate_pct)) {
             raw_loss = constrain_float(motor_fault_loss_estimate_pct, 0.0f, 100.0f);
-            confidence = motor_fault_severity_observable ? fit_confidence : 0.0f;
+            // Identity confirmation provides only a modest floor; current
+            // residual quality can raise confidence, but never forces it to 1.
+            // When severity is temporarily unobservable the estimate itself is
+            // frozen, so the scheduler may continue smoothly toward that
+            // frozen value without accepting new low-quality severity updates.
+            confidence = motor_fault_severity_observable ?
+                MAX(0.25f, fit_confidence) : 0.25f;
         } else {
             const bool estimate_valid =
                 isfinite(motor_fault_loss_estimate_pct) &&
