@@ -626,6 +626,9 @@ void ModeAdaptive::update_auto_motor_fault_detector(float time_in_this_run)
     if (!mode29_finite(sigma_now)) {
         motor_fault_candidate_id = 0;
         motor_fault_confirm_count = 0;
+        motor_fault_candidate_release_count = 0;
+        motor_fault_candidate_loss_raw_pct = 0.0f;
+        motor_fault_candidate_loss_filtered_pct = 0.0f;
         motor_fault_recovery_count = 0;
         motor_fault_severity_observable = false;
         return;
@@ -902,12 +905,15 @@ void ModeAdaptive::update_auto_motor_fault_detector(float time_in_this_run)
             motor_fault_detected_id = 0;
             motor_fault_candidate_id = 0;
             motor_fault_confirm_count = 0;
+            motor_fault_candidate_release_count = 0;
             motor_fault_recovery_count = 0;
             motor_fault_post_confirm_settle_count = 0;
             motor_fault_update_direction = 0;
             motor_fault_update_direction_count = 0;
             motor_fault_severity_observable = false;
             motor_fault_loss_estimate_pct = 0.0f;
+            motor_fault_candidate_loss_raw_pct = 0.0f;
+            motor_fault_candidate_loss_filtered_pct = 0.0f;
             motor_fault_residual_ratio = 1.0f;
             motor_fault_sigma_baseline = motor_fault_sigma_filtered;
         }
@@ -1519,12 +1525,12 @@ void ModeAdaptive::run()
                 motor_fault_detected_id,
                 motor_fault_loss_estimate_pct);
     } else if (fdi_candidate_active) {
-        // A severe FDI candidate must protect the vehicle immediately instead
-        // of waiting for the ~60 ms identity-confirmation window. Use the
-        // candidate motor id and the current blind severity estimate in the
-        // effectiveness-aware reduced allocator on the very first candidate
-        // cycle. Formal confirmation still runs independently and only latches
-        // the diagnosis; it no longer gates protective control allocation.
+        // A severe FDI candidate protects the vehicle immediately without
+        // waiting for the ~60 ms identity-confirmation window. Trust the
+        // candidate motor identity, but deliberately do NOT trust the raw
+        // candidate severity yet: use a fixed 60% provisional loss until
+        // confirmation. This prevents one-cycle 90..100% residual spikes from
+        // causing an extreme allocator jump at the 60% detection boundary.
         const float candidate_loss_pct =
             100.0f * MOTOR_FDI_CANDIDATE_PROTECTION_LOSS_FRACTION;
         motorPWMCommanded =
