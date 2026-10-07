@@ -255,6 +255,9 @@ bool ModeAdaptive::init(bool ignore_checks)
     const float configured_takeoff_time = (float)g.m29_takeoff_time;
     const float configured_settle_time = (float)g.m29_settle_time;
     const float configured_max_tilt = (float)g.m29_max_tilt;
+    const float configured_yaw_kd = (float)g.m29_yaw_kd;
+    const float configured_yaw_rmax = (float)g.m29_yaw_rmax;
+    const float configured_yaw_mmax = (float)g.m29_yaw_mmax;
 
     if (!isfinite(configured_takeoff_alt) ||
         configured_takeoff_alt < 0.2f ||
@@ -288,6 +291,20 @@ bool ModeAdaptive::init(bool ignore_checks)
         return false;
     }
 
+    if (!isfinite(configured_yaw_kd) ||
+        configured_yaw_kd < 0.0f ||
+        configured_yaw_kd > 0.2f ||
+        !isfinite(configured_yaw_rmax) ||
+        configured_yaw_rmax < 30.0f ||
+        configured_yaw_rmax > 1500.0f ||
+        !isfinite(configured_yaw_mmax) ||
+        configured_yaw_mmax < 0.0f ||
+        configured_yaw_mmax > 0.5f) {
+        GCS_SEND_TEXT(MAV_SEVERITY_CRITICAL,
+                      "Mode29 rejected: yaw protection params invalid");
+        return false;
+    }
+
     // Freeze the trajectory configuration for this Mode29 run. The Orange Pi
     // tool only writes these values while DISARMED, so a flight cannot change
     // its reference trajectory halfway through the run.
@@ -295,6 +312,9 @@ bool ModeAdaptive::init(bool ignore_checks)
     takeoffTime = configured_takeoff_time;
     settleTime = configured_settle_time;
     maxTiltDeg = configured_max_tilt;
+    yawDampKd = configured_yaw_kd;
+    yawRateMax = configured_yaw_rmax * DEG_TO_RAD;
+    yawMomentMax = configured_yaw_mmax;
     reset_gain_schedule();
 
     motorEnable = 1;
@@ -367,6 +387,10 @@ void ModeAdaptive::clear_auto_motor_fault()
     motor_fault_candidate_id = 0;
     motor_fault_confirm_count = 0;
     motor_fault_recovery_count = 0;
+    motor_fault_post_confirm_settle_count = 0;
+    motor_fault_update_direction = 0;
+    motor_fault_update_direction_count = 0;
+    motor_fault_severity_observable = false;
     motor_fault_loss_estimate_pct = 0.0f;
     motor_fault_residual_ratio = 1.0f;
     motor_fault_sigma_filtered.x = 0.0f;
@@ -518,22 +542,31 @@ void ModeAdaptive::update_gain_schedule(bool motor_degradation_active)
             confidence = 1.0f;
         }
     } else if (mode == 2) {
-        // Automatic mode: use the onboard blind-FDI severity estimate.
-        const float fit_limit = 0.55f;
+        // Automatic mode: the isolated motor id and the continuous severity
+        // estimate run on different time scales. A confirmed id no longer
+        // implies perfect severity confidence.
+        const float fit_limit = MOTOR_FDI_CONFIRMED_MAX_RESIDUAL_RATIO;
         const float fit_confidence = constrain_float(
             1.0f - motor_fault_residual_ratio / fit_limit,
             0.0f,
             1.0f
         );
-        const bool estimate_valid =
-            isfinite(motor_fault_loss_estimate_pct) &&
-            isfinite(motor_fault_residual_ratio) &&
-            motor_fault_loss_estimate_pct >= 40.0f &&
-            (motor_fault_confirmed || motor_fault_residual_ratio <= fit_limit);
 
-        if (estimate_valid) {
+        if (motor_fault_confirmed &&
+            isfinite(motor_fault_loss_estimate_pct)) {
             raw_loss = constrain_float(motor_fault_loss_estimate_pct, 0.0f, 100.0f);
-            confidence = motor_fault_confirmed ? 1.0f : fit_confidence;
+            confidence = motor_fault_severity_observable ? fit_confidence : 0.0f;
+        } else {
+            const bool estimate_valid =
+                isfinite(motor_fault_loss_estimate_pct) &&
+                isfinite(motor_fault_residual_ratio) &&
+                motor_fault_loss_estimate_pct >= 40.0f &&
+                motor_fault_residual_ratio <= fit_limit;
+
+            if (estimate_valid) {
+                raw_loss = constrain_float(motor_fault_loss_estimate_pct, 0.0f, 100.0f);
+                confidence = fit_confidence;
+            }
         }
     }
 
@@ -546,10 +579,16 @@ void ModeAdaptive::update_gain_schedule(bool motor_degradation_active)
         return;
     }
 
-    // Confidence gate, LPF and rate limiter prevent gain/tilt chatter when
-    // automatic severity estimation is noisy. Oracle mode passes through the
-    // same smooth transition so the fault step does not create a parameter step.
-    const float target_loss = confidence >= 0.20f ? raw_loss : 0.0f;
+    // If a confirmed fault is temporarily unobservable (low motor command,
+    // allocator transition, or poor fit), freeze the scheduled severity rather
+    // than driving it toward either 0% or 100% on low-quality evidence.
+    float target_loss = 0.0f;
+    if (confidence >= 0.20f) {
+        target_loss = raw_loss;
+    } else if (mode == 2 && motor_fault_confirmed) {
+        target_loss = gain_schedule_loss_sched_pct;
+    }
+
     const float lpf_target =
         gain_schedule_loss_sched_pct +
         0.08f * (target_loss - gain_schedule_loss_sched_pct);
@@ -567,13 +606,10 @@ void ModeAdaptive::update_gain_schedule(bool motor_degradation_active)
 
 void ModeAdaptive::update_auto_motor_fault_detector(float time_in_this_run)
 {
-    // IMPORTANT: this detector is intentionally blind to the fault injector.
-    // It never reads motor_degradation_motor_id or motor_degradation_loss_pct.
-    // Before confirmation it identifies the motor from the L1 matched-moment
-    // estimate. After confirmation it keeps estimating that motor's remaining
-    // effectiveness from the residual created by the effectiveness-aware
-    // allocator. This also provides a blind recovery path when the actuator
-    // returns to normal.
+    // Blind FDI uses only the L1 matched-moment estimate and commanded motor
+    // state. Motor identity is confirmed on a fast discrete time scale; the
+    // continuous loss estimate is deliberately slower and guarded against
+    // allocator-switch transients and low-observability updates.
     Vector3f sigma_now = {
         sigma_m_hat_prev[1],
         sigma_m_hat_prev[2],
@@ -584,6 +620,7 @@ void ModeAdaptive::update_auto_motor_fault_detector(float time_in_this_run)
         motor_fault_candidate_id = 0;
         motor_fault_confirm_count = 0;
         motor_fault_recovery_count = 0;
+        motor_fault_severity_observable = false;
         return;
     }
 
@@ -597,7 +634,8 @@ void ModeAdaptive::update_auto_motor_fault_detector(float time_in_this_run)
     constexpr float sigma_alpha = 0.05f;
     constexpr float baseline_alpha_fast = 0.02f;
     constexpr float baseline_alpha_slow = 0.0005f;
-    constexpr float confirmed_loss_update_gain = 0.05f;
+    constexpr float severity_nominal_gain = 0.05f;
+    constexpr float dt = 0.0025f; // Mode29 loop is ~400 Hz
 
     motor_fault_sigma_filtered =
         motor_fault_sigma_filtered +
@@ -619,6 +657,10 @@ void ModeAdaptive::update_auto_motor_fault_detector(float time_in_this_run)
         motor_fault_candidate_id = 0;
         motor_fault_confirm_count = 0;
         motor_fault_recovery_count = 0;
+        motor_fault_post_confirm_settle_count = 0;
+        motor_fault_update_direction = 0;
+        motor_fault_update_direction_count = 0;
+        motor_fault_severity_observable = false;
         motor_fault_loss_estimate_pct = 0.0f;
         motor_fault_residual_ratio = 1.0f;
         return;
@@ -628,7 +670,6 @@ void ModeAdaptive::update_auto_motor_fault_detector(float time_in_this_run)
         motor_fault_sigma_filtered - motor_fault_sigma_baseline;
     const float observed_rp =
         sqrtf(observed.x * observed.x + observed.y * observed.y);
-    const float observed_norm = observed.length();
 
 #if (!REAL_OR_SITL)
     const float detector_L = 0.25f;
@@ -677,14 +718,22 @@ void ModeAdaptive::update_auto_motor_fault_detector(float time_in_this_run)
         return signature;
     };
 
-    // Once a severe fault is confirmed, keep the isolated motor id but continue
-    // estimating the loss percentage.  With an effectiveness-aware allocator,
-    // a correctly estimated loss produces near-zero residual.  If the motor
-    // recovers, the allocator temporarily over-compensates and the projection
-    // becomes negative, which drives the loss estimate back toward zero.
     if (motor_fault_confirmed) {
         if (motor_fault_detected_id < 1 || motor_fault_detected_id > 4) {
             clear_auto_motor_fault();
+            return;
+        }
+
+        // Do not integrate the confirmation/pre-switch residual into severity.
+        // Let the effectiveness-aware allocator, motor/ESC and L1 observer settle
+        // first. The identity stays latched throughout this window.
+        if (motor_fault_post_confirm_settle_count > 0U) {
+            motor_fault_post_confirm_settle_count--;
+            motor_fault_recovery_count = 0;
+            motor_fault_update_direction = 0;
+            motor_fault_update_direction_count = 0;
+            motor_fault_severity_observable = false;
+            motor_fault_residual_ratio = 1.0f;
             return;
         }
 
@@ -692,48 +741,114 @@ void ModeAdaptive::update_auto_motor_fault_detector(float time_in_this_run)
         const float w =
             constrain_float(motor_fault_nominal_prev[idx], 0.0f, 100.0f);
         const Vector3f signature = motor_loss_signature(idx, w);
-        const float signature_norm_sq = signature * signature;
+        const float signature_rp_norm_sq =
+            signature.x * signature.x + signature.y * signature.y;
 
-        if (!isfinite(signature_norm_sq) || signature_norm_sq < 1.0e-6f ||
-            !isfinite(observed_norm)) {
+        if (!isfinite(observed_rp) ||
+            w < MOTOR_FDI_MIN_SEVERITY_MOTOR_CMD ||
+            !isfinite(signature_rp_norm_sq) ||
+            signature_rp_norm_sq < MOTOR_FDI_MIN_SIGNATURE_NORM_SQ) {
+            motor_fault_severity_observable = false;
+            motor_fault_residual_ratio = 1.0f;
+            motor_fault_update_direction = 0;
+            motor_fault_update_direction_count = 0;
             motor_fault_recovery_count = 0;
             return;
         }
 
-        const float signed_residual_fraction =
-            (observed * signature) / signature_norm_sq;
-        const Vector3f fit_error =
-            observed - signature * signed_residual_fraction;
+        // Yaw is intentionally released in fault protection. Use only the
+        // roll/pitch signature for severity so high yaw rate and yaw damping do
+        // not contaminate the effectiveness estimate.
+        if (observed_rp < 0.02f) {
+            motor_fault_severity_observable = false;
+            motor_fault_residual_ratio = 1.0f;
+            motor_fault_update_direction = 0;
+            motor_fault_update_direction_count = 0;
+            motor_fault_recovery_count = 0;
+            return;
+        }
+
+        float signed_residual_fraction =
+            (observed.x * signature.x + observed.y * signature.y) /
+            signature_rp_norm_sq;
+        const float fit_x =
+            observed.x - signature.x * signed_residual_fraction;
+        const float fit_y =
+            observed.y - signature.y * signed_residual_fraction;
         const float residual_ratio =
-            fit_error.length() / MAX(observed_norm, 1.0e-4f);
+            sqrtf(fit_x * fit_x + fit_y * fit_y) /
+            MAX(observed_rp, 0.02f);
 
         motor_fault_residual_ratio =
             isfinite(residual_ratio) ? residual_ratio : 1.0f;
+        motor_fault_severity_observable =
+            isfinite(signed_residual_fraction) &&
+            motor_fault_residual_ratio <=
+                MOTOR_FDI_CONFIRMED_MAX_RESIDUAL_RATIO;
 
-        // Only adapt the effectiveness estimate when the residual still looks
-        // like the isolated motor's signature.  This prevents unrelated motion
-        // or mocap transients from walking the estimate.
-        if (isfinite(signed_residual_fraction) &&
-            (observed_norm < 1.0e-4f ||
-             motor_fault_residual_ratio <= 0.55f)) {
-            float loss_fraction =
-                constrain_float(motor_fault_loss_estimate_pct * 0.01f,
-                                0.0f,
-                                1.0f);
-            loss_fraction = constrain_float(
-                loss_fraction +
-                    confirmed_loss_update_gain * signed_residual_fraction,
-                0.0f,
-                1.0f
+        if (motor_fault_severity_observable) {
+            signed_residual_fraction = constrain_float(
+                signed_residual_fraction,
+                -MOTOR_FDI_MAX_PROJECTED_RESIDUAL_FRACTION,
+                +MOTOR_FDI_MAX_PROJECTED_RESIDUAL_FRACTION
             );
-            motor_fault_loss_estimate_pct = 100.0f * loss_fraction;
+
+            if (fabsf(signed_residual_fraction) >=
+                MOTOR_FDI_RESIDUAL_DEADBAND_FRACTION) {
+                const int8_t update_direction =
+                    signed_residual_fraction > 0.0f ? 1 : -1;
+
+                if (motor_fault_update_direction == update_direction) {
+                    if (motor_fault_update_direction_count < 65535U) {
+                        motor_fault_update_direction_count++;
+                    }
+                } else {
+                    motor_fault_update_direction = update_direction;
+                    motor_fault_update_direction_count = 1U;
+                }
+
+                if (motor_fault_update_direction_count >=
+                    MOTOR_FDI_UPDATE_DIRECTION_SAMPLES) {
+                    const float raw_step =
+                        severity_nominal_gain * signed_residual_fraction;
+                    const float max_rise_step =
+                        MOTOR_FDI_MAX_LOSS_RISE_PER_SEC * dt;
+                    const float max_fall_step =
+                        MOTOR_FDI_MAX_LOSS_FALL_PER_SEC * dt;
+                    const float limited_step = constrain_float(
+                        raw_step,
+                        -max_fall_step,
+                        +max_rise_step
+                    );
+
+                    float loss_fraction =
+                        constrain_float(
+                            motor_fault_loss_estimate_pct * 0.01f,
+                            0.0f,
+                            1.0f
+                        );
+                    loss_fraction = constrain_float(
+                        loss_fraction + limited_step,
+                        0.0f,
+                        1.0f
+                    );
+                    motor_fault_loss_estimate_pct =
+                        100.0f * loss_fraction;
+                }
+            } else {
+                motor_fault_update_direction = 0;
+                motor_fault_update_direction_count = 0;
+            }
+        } else {
+            motor_fault_update_direction = 0;
+            motor_fault_update_direction_count = 0;
         }
 
         const bool recovered =
             motor_fault_loss_estimate_pct <=
                 100.0f * MOTOR_FDI_RELEASE_LOSS_FRACTION &&
-            (observed_norm < MOTOR_FDI_MIN_RP_MOMENT ||
-             motor_fault_residual_ratio <= 0.55f);
+            motor_fault_severity_observable &&
+            signed_residual_fraction < 0.0f;
 
         if (recovered) {
             if (motor_fault_recovery_count < 65535U) {
@@ -750,13 +865,16 @@ void ModeAdaptive::update_auto_motor_fault_detector(float time_in_this_run)
                           (unsigned)recovered_motor,
                           (double)motor_fault_loss_estimate_pct);
 
-            // Re-anchor the healthy baseline at the current observer state so
-            // the recovery transient does not immediately retrigger the FDI.
             motor_fault_confirmed = false;
+            motor_fault_yaw_free_latched = false;
             motor_fault_detected_id = 0;
             motor_fault_candidate_id = 0;
             motor_fault_confirm_count = 0;
             motor_fault_recovery_count = 0;
+            motor_fault_post_confirm_settle_count = 0;
+            motor_fault_update_direction = 0;
+            motor_fault_update_direction_count = 0;
+            motor_fault_severity_observable = false;
             motor_fault_loss_estimate_pct = 0.0f;
             motor_fault_residual_ratio = 1.0f;
             motor_fault_sigma_baseline = motor_fault_sigma_filtered;
@@ -764,17 +882,24 @@ void ModeAdaptive::update_auto_motor_fault_detector(float time_in_this_run)
         return;
     }
 
-    if (!isfinite(observed_norm) ||
+    if (!isfinite(observed_rp) ||
         observed_rp < MOTOR_FDI_MIN_RP_MOMENT) {
         motor_fault_sigma_baseline =
             motor_fault_sigma_baseline +
             (motor_fault_sigma_filtered - motor_fault_sigma_baseline) *
                 baseline_alpha_slow;
-        motor_fault_candidate_id = 0;
-        motor_fault_confirm_count = 0;
-        motor_fault_recovery_count = 0;
-        motor_fault_loss_estimate_pct = 0.0f;
-        motor_fault_residual_ratio = 1.0f;
+
+        // Candidate protection releases only when its evidence counter decays
+        // to zero, avoiding one-sample allocator chatter.
+        if (motor_fault_confirm_count > 0U) {
+            motor_fault_confirm_count--;
+        }
+        if (motor_fault_confirm_count == 0U) {
+            motor_fault_candidate_id = 0;
+            motor_fault_loss_estimate_pct = 0.0f;
+            motor_fault_residual_ratio = 1.0f;
+        }
+        motor_fault_severity_observable = false;
         return;
     }
 
@@ -786,21 +911,25 @@ void ModeAdaptive::update_auto_motor_fault_detector(float time_in_this_run)
         const float w =
             constrain_float(motor_fault_nominal_prev[i], 0.0f, 100.0f);
         const Vector3f signature = motor_loss_signature(i, w);
-        const float signature_norm_sq = signature * signature;
+        const float signature_rp_norm_sq =
+            signature.x * signature.x + signature.y * signature.y;
 
-        if (!isfinite(signature_norm_sq) || signature_norm_sq < 1.0e-6f) {
+        if (!isfinite(signature_rp_norm_sq) ||
+            signature_rp_norm_sq < MOTOR_FDI_MIN_SIGNATURE_NORM_SQ) {
             continue;
         }
 
         const float loss_fraction = constrain_float(
-            (observed * signature) / signature_norm_sq,
+            (observed.x * signature.x + observed.y * signature.y) /
+                signature_rp_norm_sq,
             0.0f,
             1.0f
         );
-        const Vector3f fit_error =
-            observed - signature * loss_fraction;
+        const float fit_x = observed.x - signature.x * loss_fraction;
+        const float fit_y = observed.y - signature.y * loss_fraction;
         const float residual_ratio =
-            fit_error.length() / MAX(observed_norm, 1.0e-4f);
+            sqrtf(fit_x * fit_x + fit_y * fit_y) /
+            MAX(observed_rp, 0.02f);
 
         if (isfinite(residual_ratio) && residual_ratio < best_ratio) {
             best_ratio = residual_ratio;
@@ -808,9 +937,6 @@ void ModeAdaptive::update_auto_motor_fault_detector(float time_in_this_run)
             best_motor = i + 1U;
         }
     }
-
-    motor_fault_loss_estimate_pct = 100.0f * best_loss;
-    motor_fault_residual_ratio = best_ratio;
 
     const bool severe_candidate =
         best_motor != 0 &&
@@ -822,11 +948,21 @@ void ModeAdaptive::update_auto_motor_fault_detector(float time_in_this_run)
             motor_fault_sigma_baseline +
             (motor_fault_sigma_filtered - motor_fault_sigma_baseline) *
                 baseline_alpha_slow;
-        motor_fault_candidate_id = 0;
-        motor_fault_confirm_count = 0;
-        motor_fault_recovery_count = 0;
+        if (motor_fault_confirm_count > 0U) {
+            motor_fault_confirm_count--;
+        }
+        if (motor_fault_confirm_count == 0U) {
+            motor_fault_candidate_id = 0;
+            motor_fault_loss_estimate_pct = 0.0f;
+            motor_fault_residual_ratio = 1.0f;
+        }
+        motor_fault_severity_observable = false;
         return;
     }
+
+    motor_fault_loss_estimate_pct = 100.0f * best_loss;
+    motor_fault_residual_ratio = best_ratio;
+    motor_fault_severity_observable = true;
 
     if (motor_fault_candidate_id == best_motor) {
         if (motor_fault_confirm_count < 65535U) {
@@ -834,7 +970,7 @@ void ModeAdaptive::update_auto_motor_fault_detector(float time_in_this_run)
         }
     } else {
         motor_fault_candidate_id = best_motor;
-        motor_fault_confirm_count = 1;
+        motor_fault_confirm_count = 1U;
     }
 
     if (motor_fault_confirm_count >= MOTOR_FDI_CONFIRM_SAMPLES) {
@@ -842,6 +978,18 @@ void ModeAdaptive::update_auto_motor_fault_detector(float time_in_this_run)
         motor_fault_yaw_free_latched = true;
         motor_fault_detected_id = best_motor;
         motor_fault_recovery_count = 0;
+        motor_fault_post_confirm_settle_count =
+            MOTOR_FDI_POST_CONFIRM_SETTLE_SAMPLES;
+        motor_fault_update_direction = 0;
+        motor_fault_update_direction_count = 0;
+        motor_fault_severity_observable = false;
+
+        // Flush the pre-confirmation filtered disturbance. During the explicit
+        // settle window above, new samples rebuild this state under the new
+        // effectiveness-aware allocator instead of integrating the old residual
+        // a second time.
+        motor_fault_sigma_filtered = motor_fault_sigma_baseline;
+
         GCS_SEND_TEXT(MAV_SEVERITY_CRITICAL,
                       "Mode29 FDI: M%u severe loss %.0f%%",
                       (unsigned)motor_fault_detected_id,
@@ -1188,8 +1336,11 @@ void ModeAdaptive::run()
                        (double)gain_schedule_active.koz,
                        (double)gain_schedule_active.max_tilt_deg);
 
+    const bool fdi_candidate_active =
+        !motor_fault_confirmed && motor_fault_candidate_id != 0U;
     const bool yaw_free_active =
         motor_fault_yaw_free_latched ||
+        fdi_candidate_active ||
         (motor_degradation_active && motor_degradation_yaw_free);
 
     if (yaw_free_active) {
@@ -1202,16 +1353,16 @@ void ModeAdaptive::run()
     }
 
     VectorN<float, 4> thrustMomentCmd;
-    thrustMomentCmd = geometricController(targetPos, targetVel, targetAcc, targetJerk, targetSnap, targetYaw, targetYaw_dot, targetYaw_ddot);
+    thrustMomentCmd = geometricController(targetPos, targetVel, targetAcc, targetJerk, targetSnap, targetYaw, targetYaw_dot, targetYaw_ddot, yaw_free_active);
 
     if (!mode29_finite(thrustMomentCmd) || thrustMomentCmd[0] <= 0.0f) {
         abort_mode29("invalid geometric-controller output");
         return;
     }
 
-    if (yaw_free_active) {
-        thrustMomentCmd[3] = 0.0f;
-    }
+    // In reduced-attitude mode thrustMomentCmd[3] is a secondary yaw-rate
+    // damping request, not a heading-tracking moment. The yaw-free allocators
+    // may use it only after satisfying F/Mx/My.
 
     uint8_t LandFlag = 0;
     LandFlag = g.LandFlag;
@@ -1285,6 +1436,9 @@ void ModeAdaptive::run()
                 motor_fault_detected_id,
                 motor_fault_loss_estimate_pct);
     } else if (yaw_free_active) {
+        // Candidate protection is intentionally immediate, but it does not yet
+        // trust the unconfirmed severity. It drops the yaw objective and
+        // prioritises F/Mx/My while the identity confirmation continues.
         motorPWMCommanded =
             motorMixingYawFree(thrustMomentCmd + L1thrustMomentCmd);
     } else {
@@ -1423,7 +1577,8 @@ VectorN<float, 4> ModeAdaptive::geometricController(Vector3f targetPos,
                                                     Vector3f targetSnap,
                                                     Vector2f targetYaw,
                                                     Vector2f targetYaw_dot,
-                                                    Vector2f targetYaw_ddot)
+                                                    Vector2f targetYaw_ddot,
+                                                    bool reduced_attitude)
 {
     Vector3f r_error;
     Vector3f v_error;
@@ -1527,6 +1682,49 @@ VectorN<float, 4> ModeAdaptive::geometricController(Vector3f targetPos,
     // Calculate axis [zB_des]
     Vector3f z_axis_desired = -target_force;
     z_axis_desired.normalize();
+
+    if (reduced_attitude) {
+        // True reduced attitude: control only the thrust direction (body +Z),
+        // not a full yaw-referenced Rdes. This prevents free/high-rate yaw from
+        // entering the roll/pitch attitude objective.
+        const Vector3f e_tilt_world = z_axis_desired % z_axis;
+        const Vector3f e_tilt_body = R.transposed() * e_tilt_world;
+        const Vector3f Omega = AP::ahrs().get_gyro();
+
+        M.x = -gs.krx * e_tilt_body.x - gs.kox * Omega.x;
+        M.y = -gs.kry * e_tilt_body.y - gs.koy * Omega.y;
+
+        // Keep the real rigid-body gyroscopic coupling compensation. What is
+        // removed is yaw-heading tracking, not the physical Omega x J*Omega term.
+        const Vector3f gyro_moment = Omega % (J * Omega);
+        M.x += gyro_moment.x;
+        M.y += gyro_moment.y;
+
+        const float abs_r = fabsf(Omega.z);
+        const float excess_r = MAX(0.0f, abs_r - yawRateMax);
+        const float shaped_r =
+            Omega.z + (Omega.z >= 0.0f ? excess_r : -excess_r);
+        M.z = constrain_float(
+            -yawDampKd * shaped_r,
+            -yawMomentMax,
+            +yawMomentMax
+        );
+
+        VectorN<float, 4> reduced_cmd;
+        reduced_cmd[0] = target_thrust;
+        reduced_cmd[1] = M.x;
+        reduced_cmd[2] = M.y;
+        reduced_cmd[3] = M.z;
+
+        AP::logger().Write("L1RA",
+                           "ex,ey,r,mz",
+                           "ffff",
+                           (double)e_tilt_body.x,
+                           (double)e_tilt_body.y,
+                           (double)Omega.z,
+                           (double)M.z);
+        return reduced_cmd;
+    }
 
     // [xC_des]
     // x_axis_desired = z_axis_desired x [cos(yaw), sin(yaw), 0]^T
@@ -1909,45 +2107,9 @@ Vector3f ModeAdaptive::veeOperator(Matrix3f input)
 
 VectorN<float, 4> ModeAdaptive::motorMixingYawFree(VectorN<float, 4> thrustMomentCmd)
 {
-    // Reduced-attitude allocator: satisfy total thrust, roll moment and pitch
-    // moment without constraining reaction-torque/yaw moment.
-#if (!REAL_OR_SITL)
-    const float L = 0.25f;
-    const float D = 0.25f;
-    const float a_F = 0.0014597f;
-    const float b_F = 0.043693f;
-#elif (REAL_OR_SITL)
-    const float L = 0.28f;
-    const float D = 0.28f;
-#endif
-
-    const float F = thrustMomentCmd[0];
-    const float Mx = thrustMomentCmd[1];
-    const float My = thrustMomentCmd[2];
-
-    // Minimum-norm solution of:
-    // F  = f1 + f2 + f3 + f4
-    // Mx = L/2 * (-f1 + f2 + f3 - f4)
-    // My = D/2 * ( f1 - f2 + f3 - f4)
-    // No Mz equation is imposed.
-    VectorN<float, 4> motorThrust;
-    motorThrust[0] = F * 0.25f - Mx / (2.0f * L) + My / (2.0f * D);
-    motorThrust[1] = F * 0.25f + Mx / (2.0f * L) - My / (2.0f * D);
-    motorThrust[2] = F * 0.25f + Mx / (2.0f * L) + My / (2.0f * D);
-    motorThrust[3] = F * 0.25f - Mx / (2.0f * L) - My / (2.0f * D);
-
-    VectorN<float, 4> w;
-    for (uint8_t i = 0; i < 4; i++) {
-        const float fi = MAX(0.0f, motorThrust[i]);
-#if (!REAL_OR_SITL)
-        const float disc = b_F * b_F + 4.0f * a_F * fi;
-        w[i] = (-b_F + sqrtF(MAX(0.0f, disc))) / (2.0f * a_F);
-#elif (REAL_OR_SITL)
-        w[i] = softdrone_w_from_thrust(fi);
-#endif
-    }
-
-    return w;
+    // Same hierarchical allocator as the effectiveness-aware path with all
+    // actuator effectiveness values equal to one.
+    return motorMixingYawFreeEffectivenessAware(thrustMomentCmd, 0U, 0.0f);
 }
 
 VectorN<float, 4> ModeAdaptive::motorMixingYawFreeEffectivenessAware(
@@ -1955,35 +2117,33 @@ VectorN<float, 4> ModeAdaptive::motorMixingYawFreeEffectivenessAware(
     uint8_t degraded_motor_id,
     float estimated_loss_pct)
 {
-    // Reduced-attitude allocation with one estimated motor effectiveness.
+    // Hierarchical reduced-attitude allocation:
+    //   primary   = total thrust, roll moment, pitch moment
+    //   secondary = yaw-rate damping only in the one-dimensional null space
     //
-    // The commanded per-motor thrust vector f_cmd is solved from
-    //     [F Mx My]^T = B * diag(eta) * f_cmd
-    // where eta=1 for healthy motors and eta=(1-loss) for the isolated motor.
-    // We use the minimum-norm pseudoinverse A^T(AA^T)^-1 with
-    // A = B*diag(eta).  This preserves the remaining authority of a partially
-    // degraded motor instead of forcing it to zero.  At 100% estimated loss,
-    // eta becomes zero and the same formulation naturally reduces to a
-    // three-motor yaw-free allocator.
+    // The secondary correction therefore cannot intentionally steal authority
+    // from F/Mx/My. At 100% effectiveness loss the remaining three effective
+    // actuators have no useful null-space yaw authority, so damping naturally
+    // falls away instead of corrupting the primary wrench.
 #if (!REAL_OR_SITL)
     const float L = 0.25f;
     const float D = 0.25f;
     const float a_F = 0.0014597f;
     const float b_F = 0.043693f;
+    const float a_M = 0.000011667f;
+    const float b_M = 0.0059137f;
 #elif (REAL_OR_SITL)
     const float L = 0.28f;
     const float D = 0.28f;
 #endif
 
-    if (degraded_motor_id < 1 || degraded_motor_id > 4 ||
-        !isfinite(estimated_loss_pct)) {
-        return motorMixingYawFree(thrustMomentCmd);
-    }
-
     float eta[4] = {1.0f, 1.0f, 1.0f, 1.0f};
-    eta[degraded_motor_id - 1U] =
-        1.0f -
-        constrain_float(estimated_loss_pct, 0.0f, 100.0f) * 0.01f;
+    if (degraded_motor_id >= 1U && degraded_motor_id <= 4U &&
+        isfinite(estimated_loss_pct)) {
+        eta[degraded_motor_id - 1U] =
+            1.0f -
+            constrain_float(estimated_loss_pct, 0.0f, 100.0f) * 0.01f;
+    }
 
     const float roll_coeff[4] = {
         -0.5f * L, +0.5f * L, +0.5f * L, -0.5f * L
@@ -1991,8 +2151,8 @@ VectorN<float, 4> ModeAdaptive::motorMixingYawFreeEffectivenessAware(
     const float pitch_coeff[4] = {
         +0.5f * D, -0.5f * D, +0.5f * D, -0.5f * D
     };
+    const float yaw_sign[4] = {-1.0f, -1.0f, +1.0f, +1.0f};
 
-    // Build G = A*A^T, a symmetric 3x3 matrix.
     float g00 = 0.0f;
     float g01 = 0.0f;
     float g02 = 0.0f;
@@ -2018,8 +2178,10 @@ VectorN<float, 4> ModeAdaptive::motorMixingYawFreeEffectivenessAware(
         g01 * (g01 * g22 - g12 * g02) +
         g02 * (g01 * g12 - g11 * g02);
 
+    VectorN<float, 4> w;
     if (!isfinite(det) || fabsf(det) < 1.0e-9f) {
-        return motorMixingYawFree(thrustMomentCmd);
+        mode29_zero(w);
+        return w;
     }
 
     const float inv00 = (g11 * g22 - g12 * g12) / det;
@@ -2033,26 +2195,106 @@ VectorN<float, 4> ModeAdaptive::motorMixingYawFreeEffectivenessAware(
     const float Mx = thrustMomentCmd[1];
     const float My = thrustMomentCmd[2];
 
-    // y = (A*A^T)^-1 * desired_wrench
     const float y0 = inv00 * F + inv01 * Mx + inv02 * My;
     const float y1 = inv01 * F + inv11 * Mx + inv12 * My;
-    const float y2 = inv02 * F + inv12 * Mx + inv22 * My;
+    const float y2 = inv02 * F + inv12 * My + inv22 * My;
 
-    VectorN<float, 4> w;
+    float f_cmd[4];
     for (uint8_t i = 0; i < 4; i++) {
-        // f_cmd = A^T*y
-        const float fi_cmd = MAX(
+        f_cmd[i] = MAX(
             0.0f,
             eta[i] *
                 (y0 + roll_coeff[i] * y1 + pitch_coeff[i] * y2)
         );
+    }
 
 #if (!REAL_OR_SITL)
-        const float disc = b_F * b_F + 4.0f * a_F * fi_cmd;
+    const float f_cmd_max = a_F * 100.0f * 100.0f + b_F * 100.0f;
+#elif (REAL_OR_SITL)
+    const float f_cmd_max = softdrone_thrust_from_w(100.0f);
+#endif
+
+    // One null-space DOF exists only while all four actuators retain nonzero
+    // effectiveness. n is chosen so eta*n = [-1,-1,+1,+1], which leaves the
+    // modeled F/Mx/My wrench exactly unchanged.
+    bool yaw_nullspace_available = isfinite(thrustMomentCmd[3]);
+    float n[4];
+    for (uint8_t i = 0; i < 4; i++) {
+        if (eta[i] <= 0.01f) {
+            yaw_nullspace_available = false;
+            n[i] = 0.0f;
+        } else {
+            n[i] = yaw_sign[i] / eta[i];
+        }
+    }
+
+    if (yaw_nullspace_available && yawMomentMax > 0.0f) {
+        float current_mz = 0.0f;
+        float dmz_dalpha = 0.0f;
+        float alpha_min = -1.0e9f;
+        float alpha_max = +1.0e9f;
+
+        for (uint8_t i = 0; i < 4; i++) {
+#if (!REAL_OR_SITL)
+            const float disc =
+                b_F * b_F + 4.0f * a_F * MAX(0.0f, f_cmd[i]);
+            const float wi =
+                (-b_F + sqrtF(MAX(0.0f, disc))) / (2.0f * a_F);
+            const float mi = a_M * wi * wi + b_M * wi;
+            const float dFdw = MAX(1.0e-6f, 2.0f * a_F * wi + b_F);
+            const float dMdw = MAX(0.0f, 2.0f * a_M * wi + b_M);
+#elif (REAL_OR_SITL)
+            const float wi = softdrone_w_from_thrust(MAX(0.0f, f_cmd[i]));
+            const float mi = softdrone_moment_from_w(wi);
+            const float dFdw = softdrone_thrust_slope_from_w(wi);
+            const float dMdw = softdrone_moment_slope_from_w(wi);
+#endif
+            current_mz += eta[i] * yaw_sign[i] * mi;
+            dmz_dalpha +=
+                eta[i] * yaw_sign[i] * (dMdw / dFdw) * n[i];
+
+            if (n[i] > 0.0f) {
+                alpha_min = MAX(alpha_min, -f_cmd[i] / n[i]);
+                alpha_max = MIN(alpha_max, (f_cmd_max - f_cmd[i]) / n[i]);
+            } else if (n[i] < 0.0f) {
+                alpha_min = MAX(alpha_min, (f_cmd_max - f_cmd[i]) / n[i]);
+                alpha_max = MIN(alpha_max, -f_cmd[i] / n[i]);
+            }
+        }
+
+        if (isfinite(dmz_dalpha) &&
+            fabsf(dmz_dalpha) > 1.0e-6f &&
+            alpha_min <= alpha_max) {
+            const float requested_mz =
+                constrain_float(
+                    thrustMomentCmd[3],
+                    -yawMomentMax,
+                    +yawMomentMax
+                );
+            const float alpha = constrain_float(
+                (requested_mz - current_mz) / dmz_dalpha,
+                alpha_min,
+                alpha_max
+            );
+            for (uint8_t i = 0; i < 4; i++) {
+                f_cmd[i] =
+                    constrain_float(
+                        f_cmd[i] + alpha * n[i],
+                        0.0f,
+                        f_cmd_max
+                    );
+            }
+        }
+    }
+
+    for (uint8_t i = 0; i < 4; i++) {
+#if (!REAL_OR_SITL)
+        const float disc =
+            b_F * b_F + 4.0f * a_F * MAX(0.0f, f_cmd[i]);
         w[i] =
             (-b_F + sqrtF(MAX(0.0f, disc))) / (2.0f * a_F);
 #elif (REAL_OR_SITL)
-        w[i] = softdrone_w_from_thrust(fi_cmd);
+        w[i] = softdrone_w_from_thrust(MAX(0.0f, f_cmd[i]));
 #endif
         w[i] = constrain_float(w[i], 0.0f, 100.0f);
     }
