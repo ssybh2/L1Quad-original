@@ -21,12 +21,12 @@ As soon as a severe candidate exists, Mode29 now:
 - switches to true reduced-attitude control based on desired thrust direction;
 - controls F/Mx/My as the primary wrench;
 - requests only secondary yaw-rate damping;
-- uses the yaw-free primary allocator while motor identity is still unconfirmed.
+- immediately uses the candidate motor ID and current blind severity estimate
+  in the effectiveness-aware reduced allocator.
 
-The candidate stage deliberately does **not** trust the unconfirmed continuous
-severity enough to use effectiveness-aware compensation. This preserves the
-independent FDI confirmation path while removing the dangerous yaw objective
-immediately.
+Formal confirmation now only latches the diagnosis. It no longer gates protective
+allocation: the first severe-candidate cycle already changes actuator effectiveness
+for F/Mx/My allocation while confirmation continues independently.
 
 ### Confirmed fault
 
