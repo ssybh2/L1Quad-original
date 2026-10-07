@@ -1441,10 +1441,27 @@ void ModeAdaptive::run()
                 thrustMomentCmd + L1thrustMomentCmd,
                 motor_fault_detected_id,
                 motor_fault_loss_estimate_pct);
+    } else if (fdi_candidate_active) {
+        // A severe FDI candidate must protect the vehicle immediately instead
+        // of waiting for the ~60 ms identity-confirmation window. Use the
+        // candidate motor id and the current blind severity estimate in the
+        // effectiveness-aware reduced allocator on the very first candidate
+        // cycle. Formal confirmation still runs independently and only latches
+        // the diagnosis; it no longer gates protective control allocation.
+        const float candidate_loss_pct = constrain_float(
+            motor_fault_loss_estimate_pct,
+            100.0f * MOTOR_FDI_MIN_LOSS_FRACTION,
+            100.0f
+        );
+        motorPWMCommanded =
+            motorMixingYawFreeEffectivenessAware(
+                thrustMomentCmd + L1thrustMomentCmd,
+                motor_fault_candidate_id,
+                candidate_loss_pct);
     } else if (yaw_free_active) {
-        // Candidate protection is intentionally immediate, but it does not yet
-        // trust the unconfirmed severity. It drops the yaw objective and
-        // prioritises F/Mx/My while the identity confirmation continues.
+        // Manual/oracle yaw-free operation without an automatic FDI candidate
+        // keeps the ordinary reduced allocator with all actuator
+        // effectiveness values equal to one.
         motorPWMCommanded =
             motorMixingYawFree(thrustMomentCmd + L1thrustMomentCmd);
     } else {
