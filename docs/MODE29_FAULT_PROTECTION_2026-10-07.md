@@ -38,6 +38,18 @@ The raw Candidate severity is logged separately and low-pass filtered only for
 initialising the continuous severity estimate after formal confirmation. The
 Candidate allocator itself remains fixed at the 60% provisional protection level.
 
+After Candidate protection starts, FDI changes interpretation of the residual.
+The effectiveness-aware allocator has already modelled a 60% loss, so the
+remaining L1 residual is treated as a correction around that model:
+
+`absolute loss ~= 60% provisional loss + residual correction`.
+
+The uncompensated pre-Candidate residual is flushed when Candidate protection is
+entered so the same transient is not counted twice. This prevents a correctly
+compensated 60% fault from appearing to "disappear" merely because the allocator
+has removed most of its residual. Candidate confirmation is also gated on minimum
+actuator command/signature observability.
+
 Formal confirmation still latches the diagnosis after the existing confirmation
 window; it no longer gates the start of protective control allocation.
 
