@@ -1954,7 +1954,7 @@ public:
     static constexpr float MOTOR_FDI_MAX_RESIDUAL_RATIO = 0.35f;
     static constexpr float MOTOR_FDI_CONFIRMED_MAX_RESIDUAL_RATIO = 0.55f;
     static constexpr float MOTOR_FDI_MIN_RP_MOMENT = 0.20f;          // N*m
-    static constexpr float MOTOR_FDI_MIN_SEVERITY_MOTOR_CMD = 15.0f; // w=(PWM-1000)/10
+    static constexpr float MOTOR_FDI_MIN_SEVERITY_MOTOR_CMD = 13.0f; // w=(PWM-1000)/10
     static constexpr float MOTOR_FDI_MIN_SIGNATURE_NORM_SQ = 2.5e-3f;
     static constexpr float MOTOR_FDI_RESIDUAL_DEADBAND_FRACTION = 0.02f;
     static constexpr float MOTOR_FDI_MAX_PROJECTED_RESIDUAL_FRACTION = 0.25f;
