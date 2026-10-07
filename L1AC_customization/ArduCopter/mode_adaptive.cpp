@@ -386,12 +386,15 @@ void ModeAdaptive::clear_auto_motor_fault()
     motor_fault_detected_id = 0;
     motor_fault_candidate_id = 0;
     motor_fault_confirm_count = 0;
+    motor_fault_candidate_release_count = 0;
     motor_fault_recovery_count = 0;
     motor_fault_post_confirm_settle_count = 0;
     motor_fault_update_direction = 0;
     motor_fault_update_direction_count = 0;
     motor_fault_severity_observable = false;
     motor_fault_loss_estimate_pct = 0.0f;
+    motor_fault_candidate_loss_raw_pct = 0.0f;
+    motor_fault_candidate_loss_filtered_pct = 0.0f;
     motor_fault_residual_ratio = 1.0f;
     motor_fault_sigma_filtered.x = 0.0f;
     motor_fault_sigma_filtered.y = 0.0f;
@@ -562,17 +565,15 @@ void ModeAdaptive::update_gain_schedule(bool motor_degradation_active)
             // frozen value without accepting new low-quality severity updates.
             confidence = motor_fault_severity_observable ?
                 MAX(0.25f, fit_confidence) : 0.25f;
-        } else {
-            const bool estimate_valid =
-                isfinite(motor_fault_loss_estimate_pct) &&
-                isfinite(motor_fault_residual_ratio) &&
-                motor_fault_loss_estimate_pct >= 40.0f &&
-                motor_fault_residual_ratio <= fit_limit;
-
-            if (estimate_valid) {
-                raw_loss = constrain_float(motor_fault_loss_estimate_pct, 0.0f, 100.0f);
-                confidence = fit_confidence;
-            }
+        } else if (motor_fault_candidate_id != 0U) {
+            // Candidate identity is actionable immediately, but candidate
+            // severity is not. Keep the automatic schedule on the same fixed
+            // provisional 60% protection level used by the allocator. This
+            // prevents a one-cycle 90..100% blind estimate from retuning the
+            // controller before identity confirmation.
+            raw_loss =
+                100.0f * MOTOR_FDI_CANDIDATE_PROTECTION_LOSS_FRACTION;
+            confidence = 0.25f;
         }
     }
 
@@ -655,20 +656,45 @@ void ModeAdaptive::update_auto_motor_fault_detector(float time_in_this_run)
         time_in_this_run >= (takeoffTime + settleTime) &&
         motor_fault_nominal_prev_valid;
 
+    const auto clear_candidate_state = [this]() {
+        motor_fault_candidate_id = 0;
+        motor_fault_confirm_count = 0;
+        motor_fault_candidate_release_count = 0;
+        motor_fault_candidate_loss_raw_pct = 0.0f;
+        motor_fault_candidate_loss_filtered_pct = 0.0f;
+        if (!motor_fault_confirmed) {
+            motor_fault_loss_estimate_pct = 0.0f;
+            motor_fault_residual_ratio = 1.0f;
+        }
+    };
+
+    const auto age_candidate_evidence = [this, &clear_candidate_state]() {
+        if (motor_fault_candidate_id == 0U) {
+            return;
+        }
+        if (motor_fault_confirm_count > 0U) {
+            motor_fault_confirm_count--;
+        }
+        if (motor_fault_candidate_release_count < 65535U) {
+            motor_fault_candidate_release_count++;
+        }
+        if (motor_fault_candidate_release_count >=
+            MOTOR_FDI_CANDIDATE_RELEASE_SAMPLES) {
+            clear_candidate_state();
+        }
+    };
+
     if (!detector_gate) {
         motor_fault_sigma_baseline =
             motor_fault_sigma_baseline +
             (motor_fault_sigma_filtered - motor_fault_sigma_baseline) *
                 baseline_alpha_fast;
-        motor_fault_candidate_id = 0;
-        motor_fault_confirm_count = 0;
+        clear_candidate_state();
         motor_fault_recovery_count = 0;
         motor_fault_post_confirm_settle_count = 0;
         motor_fault_update_direction = 0;
         motor_fault_update_direction_count = 0;
         motor_fault_severity_observable = false;
-        motor_fault_loss_estimate_pct = 0.0f;
-        motor_fault_residual_ratio = 1.0f;
         return;
     }
 
@@ -895,16 +921,10 @@ void ModeAdaptive::update_auto_motor_fault_detector(float time_in_this_run)
             (motor_fault_sigma_filtered - motor_fault_sigma_baseline) *
                 baseline_alpha_slow;
 
-        // Candidate protection releases only when its evidence counter decays
-        // to zero, avoiding one-sample allocator chatter.
-        if (motor_fault_confirm_count > 0U) {
-            motor_fault_confirm_count--;
-        }
-        if (motor_fault_confirm_count == 0U) {
-            motor_fault_candidate_id = 0;
-            motor_fault_loss_estimate_pct = 0.0f;
-            motor_fault_residual_ratio = 1.0f;
-        }
+        // Do not drop Candidate protection on a single weak sample. The
+        // control structure stays reduced/effectiveness-aware until weak
+        // evidence persists for the dedicated release window.
+        age_candidate_evidence();
         motor_fault_severity_observable = false;
         return;
     }
@@ -949,46 +969,103 @@ void ModeAdaptive::update_auto_motor_fault_detector(float time_in_this_run)
         best_loss >= MOTOR_FDI_MIN_LOSS_FRACTION &&
         best_ratio <= MOTOR_FDI_MAX_RESIDUAL_RATIO;
 
+    const bool candidate_support =
+        motor_fault_candidate_id != 0U &&
+        best_motor == motor_fault_candidate_id &&
+        best_loss >= MOTOR_FDI_CANDIDATE_RELEASE_LOSS_FRACTION &&
+        best_ratio <= MOTOR_FDI_CONFIRMED_MAX_RESIDUAL_RATIO;
+
     if (!severe_candidate) {
         motor_fault_sigma_baseline =
             motor_fault_sigma_baseline +
             (motor_fault_sigma_filtered - motor_fault_sigma_baseline) *
                 baseline_alpha_slow;
-        if (motor_fault_confirm_count > 0U) {
-            motor_fault_confirm_count--;
+
+        if (candidate_support) {
+            // 50..60% evidence supports an already-active Candidate but does
+            // not advance formal confirmation. It resets the release timer and
+            // gently pulls the confirmation-only severity filter back toward
+            // the 60% provisional protection floor.
+            motor_fault_candidate_release_count = 0U;
+            if (motor_fault_confirm_count > 0U) {
+                motor_fault_confirm_count--;
+            }
+            motor_fault_candidate_loss_raw_pct = 100.0f * best_loss;
+            const float support_target_pct = MAX(
+                100.0f * MOTOR_FDI_CANDIDATE_PROTECTION_LOSS_FRACTION,
+                motor_fault_candidate_loss_raw_pct
+            );
+            motor_fault_candidate_loss_filtered_pct +=
+                MOTOR_FDI_CANDIDATE_LOSS_FILTER_ALPHA *
+                (support_target_pct -
+                 motor_fault_candidate_loss_filtered_pct);
+            motor_fault_loss_estimate_pct =
+                motor_fault_candidate_loss_filtered_pct;
+            motor_fault_residual_ratio = best_ratio;
+        } else {
+            age_candidate_evidence();
         }
-        if (motor_fault_confirm_count == 0U) {
-            motor_fault_candidate_id = 0;
-            motor_fault_loss_estimate_pct = 0.0f;
-            motor_fault_residual_ratio = 1.0f;
-        }
+
         motor_fault_severity_observable = false;
         return;
     }
 
-    motor_fault_loss_estimate_pct = 100.0f * best_loss;
-    motor_fault_residual_ratio = best_ratio;
-    motor_fault_severity_observable = true;
+    const float raw_candidate_loss_pct =
+        constrain_float(100.0f * best_loss, 0.0f, 100.0f);
 
     if (motor_fault_candidate_id == best_motor) {
+        motor_fault_candidate_release_count = 0U;
+        motor_fault_candidate_loss_raw_pct = raw_candidate_loss_pct;
+        motor_fault_candidate_loss_filtered_pct +=
+            MOTOR_FDI_CANDIDATE_LOSS_FILTER_ALPHA *
+            (raw_candidate_loss_pct -
+             motor_fault_candidate_loss_filtered_pct);
         if (motor_fault_confirm_count < 65535U) {
             motor_fault_confirm_count++;
         }
     } else {
+        // Identity is actionable immediately. Severity is deliberately NOT:
+        // initialise the confirmation-only filter at the 60% protection floor
+        // so a first-cycle 90..100% residual spike cannot command an extreme
+        // allocator change.
         motor_fault_candidate_id = best_motor;
         motor_fault_confirm_count = 1U;
+        motor_fault_candidate_release_count = 0U;
+        motor_fault_candidate_loss_raw_pct = raw_candidate_loss_pct;
+        motor_fault_candidate_loss_filtered_pct =
+            100.0f * MOTOR_FDI_CANDIDATE_PROTECTION_LOSS_FRACTION;
     }
+
+    motor_fault_loss_estimate_pct =
+        constrain_float(
+            motor_fault_candidate_loss_filtered_pct,
+            100.0f * MOTOR_FDI_CANDIDATE_PROTECTION_LOSS_FRACTION,
+            100.0f
+        );
+    motor_fault_residual_ratio = best_ratio;
+    motor_fault_severity_observable = true;
 
     if (motor_fault_confirm_count >= MOTOR_FDI_CONFIRM_SAMPLES) {
         motor_fault_confirmed = true;
         motor_fault_yaw_free_latched = true;
         motor_fault_detected_id = best_motor;
+        motor_fault_candidate_release_count = 0U;
         motor_fault_recovery_count = 0;
         motor_fault_post_confirm_settle_count =
             MOTOR_FDI_POST_CONFIRM_SETTLE_SAMPLES;
         motor_fault_update_direction = 0;
         motor_fault_update_direction_count = 0;
         motor_fault_severity_observable = false;
+
+        // The confirmed continuous estimator starts from the filtered
+        // Candidate severity, not the most recent raw sample. Candidate
+        // allocation itself stayed fixed at the provisional 60% throughout.
+        motor_fault_loss_estimate_pct =
+            constrain_float(
+                motor_fault_candidate_loss_filtered_pct,
+                100.0f * MOTOR_FDI_CANDIDATE_PROTECTION_LOSS_FRACTION,
+                100.0f
+            );
 
         // Flush the pre-confirmation filtered disturbance. During the explicit
         // settle window above, new samples rebuild this state under the new
@@ -1448,11 +1525,8 @@ void ModeAdaptive::run()
         // effectiveness-aware reduced allocator on the very first candidate
         // cycle. Formal confirmation still runs independently and only latches
         // the diagnosis; it no longer gates protective control allocation.
-        const float candidate_loss_pct = constrain_float(
-            motor_fault_loss_estimate_pct,
-            100.0f * MOTOR_FDI_MIN_LOSS_FRACTION,
-            100.0f
-        );
+        const float candidate_loss_pct =
+            100.0f * MOTOR_FDI_CANDIDATE_PROTECTION_LOSS_FRACTION;
         motorPWMCommanded =
             motorMixingYawFreeEffectivenessAware(
                 thrustMomentCmd + L1thrustMomentCmd,
@@ -1561,6 +1635,15 @@ void ModeAdaptive::run()
                        motor_fault_update_direction,
                        motor_fault_update_direction_count,
                        (double)gain_schedule_confidence);
+
+    AP::logger().Write("L1FC",
+                       "release,raw,filt,protect",
+                       "Hfff",
+                       motor_fault_candidate_release_count,
+                       (double)motor_fault_candidate_loss_raw_pct,
+                       (double)motor_fault_candidate_loss_filtered_pct,
+                       (double)(100.0f *
+                           MOTOR_FDI_CANDIDATE_PROTECTION_LOSS_FRACTION));
 
     if (motors->armed()) // only command the motor PWM when the vehicle is armed.
     {
