@@ -920,17 +920,148 @@ void ModeAdaptive::update_auto_motor_fault_detector(float time_in_this_run)
         return;
     }
 
+    // Once Candidate protection is active, the allocator already assumes a
+    // 60% loss on the candidate motor. From that point onward the L1 residual
+    // represents MODEL MISMATCH around that provisional loss, not the absolute
+    // motor loss. Reconstruct absolute severity as:
+    //
+    //   loss_actual ~= loss_provisional + residual_projection
+    //
+    // Without this state-aware interpretation a correctly compensated 60%
+    // fault would drive the residual toward zero, causing the detector to
+    // incorrectly drop Candidate protection and then re-acquire it repeatedly.
+    if (motor_fault_candidate_id != 0U) {
+        const uint8_t idx = motor_fault_candidate_id - 1U;
+        const float w =
+            constrain_float(motor_fault_nominal_prev[idx], 0.0f, 100.0f);
+        const Vector3f signature = motor_loss_signature(idx, w);
+        const float signature_rp_norm_sq =
+            signature.x * signature.x + signature.y * signature.y;
+
+        if (!isfinite(signature_rp_norm_sq) ||
+            signature_rp_norm_sq < MOTOR_FDI_MIN_SIGNATURE_NORM_SQ) {
+            age_candidate_evidence();
+            motor_fault_severity_observable = false;
+            return;
+        }
+
+        const float residual_correction =
+            (observed.x * signature.x + observed.y * signature.y) /
+            signature_rp_norm_sq;
+        const float fit_x =
+            observed.x - signature.x * residual_correction;
+        const float fit_y =
+            observed.y - signature.y * residual_correction;
+        const float residual_ratio =
+            sqrtf(fit_x * fit_x + fit_y * fit_y) /
+            MAX(observed_rp, 0.02f);
+
+        const float absolute_loss_fraction = constrain_float(
+            MOTOR_FDI_CANDIDATE_PROTECTION_LOSS_FRACTION +
+                residual_correction,
+            0.0f,
+            1.0f
+        );
+        const float absolute_loss_pct =
+            100.0f * absolute_loss_fraction;
+
+        motor_fault_candidate_loss_raw_pct = absolute_loss_pct;
+        motor_fault_residual_ratio =
+            isfinite(residual_ratio) ? residual_ratio : 1.0f;
+
+        const bool candidate_fit =
+            isfinite(residual_correction) &&
+            isfinite(residual_ratio) &&
+            residual_ratio <= MOTOR_FDI_CONFIRMED_MAX_RESIDUAL_RATIO;
+        const bool candidate_support =
+            candidate_fit &&
+            absolute_loss_fraction >=
+                MOTOR_FDI_CANDIDATE_RELEASE_LOSS_FRACTION;
+        const bool severe_candidate =
+            candidate_fit &&
+            absolute_loss_fraction >= MOTOR_FDI_MIN_LOSS_FRACTION &&
+            residual_ratio <= MOTOR_FDI_MAX_RESIDUAL_RATIO;
+
+        if (!candidate_support) {
+            // A real false positive under a healthy motor produces a negative
+            // correction close to -60%, so absolute severity falls toward 0
+            // and Candidate protection is released after the hysteresis hold.
+            age_candidate_evidence();
+            motor_fault_severity_observable = false;
+            return;
+        }
+
+        motor_fault_candidate_release_count = 0U;
+
+        // Keep the confirmation-only severity estimate at or above the fixed
+        // protection floor. This filter never drives Candidate allocation.
+        const float filter_target_pct = MAX(
+            100.0f * MOTOR_FDI_CANDIDATE_PROTECTION_LOSS_FRACTION,
+            absolute_loss_pct
+        );
+        motor_fault_candidate_loss_filtered_pct +=
+            MOTOR_FDI_CANDIDATE_LOSS_FILTER_ALPHA *
+            (filter_target_pct -
+             motor_fault_candidate_loss_filtered_pct);
+        motor_fault_loss_estimate_pct =
+            constrain_float(
+                motor_fault_candidate_loss_filtered_pct,
+                100.0f * MOTOR_FDI_CANDIDATE_PROTECTION_LOSS_FRACTION,
+                100.0f
+            );
+        motor_fault_severity_observable = candidate_fit;
+
+        // 50..60% supports the active Candidate and holds the control
+        // structure stable, but only >=60% high-quality evidence advances
+        // formal confirmation.
+        if (severe_candidate &&
+            motor_fault_confirm_count < 65535U) {
+            motor_fault_confirm_count++;
+        }
+
+        if (motor_fault_confirm_count >= MOTOR_FDI_CONFIRM_SAMPLES) {
+            motor_fault_confirmed = true;
+            motor_fault_yaw_free_latched = true;
+            motor_fault_detected_id = motor_fault_candidate_id;
+            motor_fault_candidate_release_count = 0U;
+            motor_fault_recovery_count = 0;
+            motor_fault_post_confirm_settle_count =
+                MOTOR_FDI_POST_CONFIRM_SETTLE_SAMPLES;
+            motor_fault_update_direction = 0;
+            motor_fault_update_direction_count = 0;
+            motor_fault_severity_observable = false;
+
+            // Start continuous severity from the filtered Candidate estimate,
+            // never from one raw residual sample.
+            motor_fault_loss_estimate_pct =
+                constrain_float(
+                    motor_fault_candidate_loss_filtered_pct,
+                    100.0f *
+                        MOTOR_FDI_CANDIDATE_PROTECTION_LOSS_FRACTION,
+                    100.0f
+                );
+
+            // Rebuild the confirmed residual under its final allocator state
+            // before allowing continuous severity integration.
+            motor_fault_sigma_filtered = motor_fault_sigma_baseline;
+
+            GCS_SEND_TEXT(MAV_SEVERITY_CRITICAL,
+                          "Mode29 FDI: M%u severe loss %.0f%%",
+                          (unsigned)motor_fault_detected_id,
+                          (double)motor_fault_loss_estimate_pct);
+        }
+        return;
+    }
+
+    // No Candidate is active yet: use the uncompensated residual to acquire
+    // motor identity. This is the only state where the residual projection is
+    // interpreted as absolute loss directly.
     if (!isfinite(observed_rp) ||
         observed_rp < MOTOR_FDI_MIN_RP_MOMENT) {
         motor_fault_sigma_baseline =
             motor_fault_sigma_baseline +
             (motor_fault_sigma_filtered - motor_fault_sigma_baseline) *
                 baseline_alpha_slow;
-
-        // Do not drop Candidate protection on a single weak sample. The
-        // control structure stays reduced/effectiveness-aware until weak
-        // evidence persists for the dedicated release window.
-        age_candidate_evidence();
         motor_fault_severity_observable = false;
         return;
     }
@@ -971,119 +1102,38 @@ void ModeAdaptive::update_auto_motor_fault_detector(float time_in_this_run)
     }
 
     const bool severe_candidate =
-        best_motor != 0 &&
+        best_motor != 0U &&
         best_loss >= MOTOR_FDI_MIN_LOSS_FRACTION &&
         best_ratio <= MOTOR_FDI_MAX_RESIDUAL_RATIO;
-
-    const bool candidate_support =
-        motor_fault_candidate_id != 0U &&
-        best_motor == motor_fault_candidate_id &&
-        best_loss >= MOTOR_FDI_CANDIDATE_RELEASE_LOSS_FRACTION &&
-        best_ratio <= MOTOR_FDI_CONFIRMED_MAX_RESIDUAL_RATIO;
 
     if (!severe_candidate) {
         motor_fault_sigma_baseline =
             motor_fault_sigma_baseline +
             (motor_fault_sigma_filtered - motor_fault_sigma_baseline) *
                 baseline_alpha_slow;
-
-        if (candidate_support) {
-            // 50..60% evidence supports an already-active Candidate but does
-            // not advance formal confirmation. It resets the release timer and
-            // gently pulls the confirmation-only severity filter back toward
-            // the 60% provisional protection floor.
-            motor_fault_candidate_release_count = 0U;
-            if (motor_fault_confirm_count > 0U) {
-                motor_fault_confirm_count--;
-            }
-            motor_fault_candidate_loss_raw_pct = 100.0f * best_loss;
-            const float support_target_pct = MAX(
-                100.0f * MOTOR_FDI_CANDIDATE_PROTECTION_LOSS_FRACTION,
-                motor_fault_candidate_loss_raw_pct
-            );
-            motor_fault_candidate_loss_filtered_pct +=
-                MOTOR_FDI_CANDIDATE_LOSS_FILTER_ALPHA *
-                (support_target_pct -
-                 motor_fault_candidate_loss_filtered_pct);
-            motor_fault_loss_estimate_pct =
-                motor_fault_candidate_loss_filtered_pct;
-            motor_fault_residual_ratio = best_ratio;
-        } else {
-            age_candidate_evidence();
-        }
-
         motor_fault_severity_observable = false;
         return;
     }
 
-    const float raw_candidate_loss_pct =
+    // Acquire motor identity immediately, but initialise Candidate severity at
+    // the fixed 60% protection floor. The pre-switch residual identified the
+    // motor; it must not be integrated again after the allocator switches.
+    motor_fault_candidate_id = best_motor;
+    motor_fault_confirm_count = 1U;
+    motor_fault_candidate_release_count = 0U;
+    motor_fault_candidate_loss_raw_pct =
         constrain_float(100.0f * best_loss, 0.0f, 100.0f);
-
-    if (motor_fault_candidate_id == best_motor) {
-        motor_fault_candidate_release_count = 0U;
-        motor_fault_candidate_loss_raw_pct = raw_candidate_loss_pct;
-        motor_fault_candidate_loss_filtered_pct +=
-            MOTOR_FDI_CANDIDATE_LOSS_FILTER_ALPHA *
-            (raw_candidate_loss_pct -
-             motor_fault_candidate_loss_filtered_pct);
-        if (motor_fault_confirm_count < 65535U) {
-            motor_fault_confirm_count++;
-        }
-    } else {
-        // Identity is actionable immediately. Severity is deliberately NOT:
-        // initialise the confirmation-only filter at the 60% protection floor
-        // so a first-cycle 90..100% residual spike cannot command an extreme
-        // allocator change.
-        motor_fault_candidate_id = best_motor;
-        motor_fault_confirm_count = 1U;
-        motor_fault_candidate_release_count = 0U;
-        motor_fault_candidate_loss_raw_pct = raw_candidate_loss_pct;
-        motor_fault_candidate_loss_filtered_pct =
-            100.0f * MOTOR_FDI_CANDIDATE_PROTECTION_LOSS_FRACTION;
-    }
-
+    motor_fault_candidate_loss_filtered_pct =
+        100.0f * MOTOR_FDI_CANDIDATE_PROTECTION_LOSS_FRACTION;
     motor_fault_loss_estimate_pct =
-        constrain_float(
-            motor_fault_candidate_loss_filtered_pct,
-            100.0f * MOTOR_FDI_CANDIDATE_PROTECTION_LOSS_FRACTION,
-            100.0f
-        );
+        motor_fault_candidate_loss_filtered_pct;
     motor_fault_residual_ratio = best_ratio;
     motor_fault_severity_observable = true;
 
-    if (motor_fault_confirm_count >= MOTOR_FDI_CONFIRM_SAMPLES) {
-        motor_fault_confirmed = true;
-        motor_fault_yaw_free_latched = true;
-        motor_fault_detected_id = best_motor;
-        motor_fault_candidate_release_count = 0U;
-        motor_fault_recovery_count = 0;
-        motor_fault_post_confirm_settle_count =
-            MOTOR_FDI_POST_CONFIRM_SETTLE_SAMPLES;
-        motor_fault_update_direction = 0;
-        motor_fault_update_direction_count = 0;
-        motor_fault_severity_observable = false;
-
-        // The confirmed continuous estimator starts from the filtered
-        // Candidate severity, not the most recent raw sample. Candidate
-        // allocation itself stayed fixed at the provisional 60% throughout.
-        motor_fault_loss_estimate_pct =
-            constrain_float(
-                motor_fault_candidate_loss_filtered_pct,
-                100.0f * MOTOR_FDI_CANDIDATE_PROTECTION_LOSS_FRACTION,
-                100.0f
-            );
-
-        // Flush the pre-confirmation filtered disturbance. During the explicit
-        // settle window above, new samples rebuild this state under the new
-        // effectiveness-aware allocator instead of integrating the old residual
-        // a second time.
-        motor_fault_sigma_filtered = motor_fault_sigma_baseline;
-
-        GCS_SEND_TEXT(MAV_SEVERITY_CRITICAL,
-                      "Mode29 FDI: M%u severe loss %.0f%%",
-                      (unsigned)motor_fault_detected_id,
-                      (double)motor_fault_loss_estimate_pct);
-    }
+    // Flush the uncompensated pre-Candidate residual. On the next loop the
+    // detector interprets residual only as mismatch around the 60% provisional
+    // model, preventing the same fault transient from being counted twice.
+    motor_fault_sigma_filtered = motor_fault_sigma_baseline;
 }
 
 void ModeAdaptive::run()
