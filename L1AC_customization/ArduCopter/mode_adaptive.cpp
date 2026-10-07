@@ -938,8 +938,11 @@ void ModeAdaptive::update_auto_motor_fault_detector(float time_in_this_run)
         const float signature_rp_norm_sq =
             signature.x * signature.x + signature.y * signature.y;
 
-        if (!isfinite(signature_rp_norm_sq) ||
+        if (w < MOTOR_FDI_MIN_SEVERITY_MOTOR_CMD ||
+            !isfinite(signature_rp_norm_sq) ||
             signature_rp_norm_sq < MOTOR_FDI_MIN_SIGNATURE_NORM_SQ) {
+            // Do not formally confirm a candidate when its actuator command is
+            // too small to make the residual correction observable.
             age_candidate_evidence();
             motor_fault_severity_observable = false;
             return;
