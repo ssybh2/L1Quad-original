@@ -72,8 +72,8 @@ After confirmation:
 - the pre-confirmation filtered disturbance is flushed before rebuilding under
   the effectiveness-aware allocator;
 - severity uses roll/pitch fault signature only, avoiding free-yaw contamination;
-- the degraded motor command must be high enough for severity observability;
-- the fault signature norm must exceed a minimum threshold;
+- the degraded motor command must be high enough for severity observability (current guard: command >= 13, where w=(PWM-1000)/10);
+- the roll/pitch fault-signature norm must exceed a minimum threshold;
 - the old small-residual OR bypass is removed;
 - residual direction must fit the isolated motor signature;
 - projected residual is bounded;
