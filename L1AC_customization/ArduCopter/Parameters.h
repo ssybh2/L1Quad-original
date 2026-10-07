@@ -508,6 +508,11 @@ public:
         k_param_m29_g100_koz,
         k_param_m29_g100_tilt,
 
+        // Mode29 free-yaw reduced-attitude protection.
+        k_param_m29_yaw_kd,
+        k_param_m29_yaw_rmax,
+        k_param_m29_yaw_mmax,
+
         // the k_param_* space is 9-bits in size
         // 511: reserved
     };
@@ -620,6 +625,9 @@ public:
     AP_Float m29_takeoff_time; // takeoff duration, s
     AP_Float m29_settle_time;  // wait after takeoff before fault injection, s
     AP_Float m29_max_tilt;     // maximum commanded combined roll/pitch tilt, deg
+    AP_Float m29_yaw_kd;       // reduced-attitude yaw-rate damping, N*m/(rad/s)
+    AP_Float m29_yaw_rmax;     // soft yaw-rate envelope, deg/s
+    AP_Float m29_yaw_mmax;     // maximum secondary yaw damping moment, N*m
 
     // Mode29 geometric-controller gain/tilt scheduling.
     // 0=disabled, 1=oracle calibration from injected loss, 2=automatic from FDI.
