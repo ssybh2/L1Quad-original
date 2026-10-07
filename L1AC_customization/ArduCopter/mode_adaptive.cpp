@@ -1536,6 +1536,15 @@ void ModeAdaptive::run()
                        (double)(sigma_m_hat_prev[2]),
                        (double)(sigma_m_hat_prev[3]));
 
+    AP::logger().Write("L1FQ",
+                       "obs,settle,dir,dcnt,conf",
+                       "BHbHf",
+                       (uint8_t)motor_fault_severity_observable,
+                       motor_fault_post_confirm_settle_count,
+                       motor_fault_update_direction,
+                       motor_fault_update_direction_count,
+                       (double)gain_schedule_confidence);
+
     if (motors->armed()) // only command the motor PWM when the vehicle is armed.
     {
         motors->rc_write(0, 1000 + motorEnable * 10 * motorPWM[0]); // manual set motor speed: PWM_MIN/MAX has been forced to 1000/2000
