@@ -649,6 +649,33 @@ const AP_Param::Info Copter::var_info[] = {
     // @User: Advanced
     GSCALAR(m29_max_tilt, "M29_MAX_TILT", M29_MAX_TILT_DEFAULT),
 
+    // @Param: M29_YAW_KD
+    // @DisplayName: Mode29 free-yaw damping gain
+    // @Description: Body-z angular-rate damping gain used only in reduced-attitude fault protection. Heading is not tracked.
+    // @Units: N*m/(rad/s)
+    // @Range: 0 0.2
+    // @Increment: 0.005
+    // @User: Advanced
+    GSCALAR(m29_yaw_kd, "M29_YAW_KD", M29_YAW_KD_DEFAULT),
+
+    // @Param: M29_YAW_RMAX
+    // @DisplayName: Mode29 soft yaw-rate envelope
+    // @Description: Soft body-z rate envelope in reduced-attitude fault protection. Above this rate the damping request is increased; it is not a guaranteed hard limit after loss of one actuator.
+    // @Units: deg/s
+    // @Range: 30 1500
+    // @Increment: 10
+    // @User: Advanced
+    GSCALAR(m29_yaw_rmax, "M29_YAW_RMAX", M29_YAW_RMAX_DEFAULT),
+
+    // @Param: M29_YAW_MMAX
+    // @DisplayName: Mode29 maximum yaw damping moment
+    // @Description: Maximum secondary yaw-damping moment request. F/Mx/My retain strict priority and this moment may be unattainable under a complete motor failure.
+    // @Units: N*m
+    // @Range: 0 0.5
+    // @Increment: 0.01
+    // @User: Advanced
+    GSCALAR(m29_yaw_mmax, "M29_YAW_MMAX", M29_YAW_MMAX_DEFAULT),
+
     // @Param: M29_GS_MODE
     // @DisplayName: Mode29 gain-schedule source
     // @Description: Selects the source used to schedule GEOCTRL KP/KV/KR/KO gains and maximum tilt. 0 disables scheduling and uses normal GEOCTRL values plus M29_MAX_TILT. 1 uses the injected motor-loss percentage for calibration/oracle testing. 2 uses the onboard FDI loss estimate.
