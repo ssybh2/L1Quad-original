@@ -1947,10 +1947,19 @@ public:
     // the injected motor id or injected loss percentage.
     static constexpr uint16_t MOTOR_FDI_CONFIRM_SAMPLES = 24U;       // ~60 ms at 400 Hz
     static constexpr uint16_t MOTOR_FDI_RECOVER_SAMPLES = 40U;       // ~100 ms at 400 Hz
+    static constexpr uint16_t MOTOR_FDI_POST_CONFIRM_SETTLE_SAMPLES = 40U; // ~100 ms
+    static constexpr uint16_t MOTOR_FDI_UPDATE_DIRECTION_SAMPLES = 4U;     // ~10 ms
     static constexpr float MOTOR_FDI_MIN_LOSS_FRACTION = 0.60f;
     static constexpr float MOTOR_FDI_RELEASE_LOSS_FRACTION = 0.35f;
     static constexpr float MOTOR_FDI_MAX_RESIDUAL_RATIO = 0.35f;
+    static constexpr float MOTOR_FDI_CONFIRMED_MAX_RESIDUAL_RATIO = 0.55f;
     static constexpr float MOTOR_FDI_MIN_RP_MOMENT = 0.20f;          // N*m
+    static constexpr float MOTOR_FDI_MIN_SEVERITY_MOTOR_CMD = 15.0f; // w=(PWM-1000)/10
+    static constexpr float MOTOR_FDI_MIN_SIGNATURE_NORM_SQ = 2.5e-3f;
+    static constexpr float MOTOR_FDI_RESIDUAL_DEADBAND_FRACTION = 0.02f;
+    static constexpr float MOTOR_FDI_MAX_PROJECTED_RESIDUAL_FRACTION = 0.25f;
+    static constexpr float MOTOR_FDI_MAX_LOSS_RISE_PER_SEC = 0.25f;  // fraction/s
+    static constexpr float MOTOR_FDI_MAX_LOSS_FALL_PER_SEC = 0.75f;  // fraction/s
 
     bool requires_GPS() const override { return false; }
     bool has_manual_throttle() const override { return true; }
@@ -2005,6 +2014,9 @@ public:
     float takeoffTime; // Mode29 smooth takeoff duration, s
     float settleTime;  // post-takeoff settle time before fault injection, s
     float maxTiltDeg;  // maximum commanded combined roll/pitch tilt, deg
+    float yawDampKd;    // free-yaw rate damping gain, N*m/(rad/s)
+    float yawRateMax;   // soft yaw-rate envelope, rad/s
+    float yawMomentMax; // maximum secondary yaw-damping moment, N*m
 
     // the variables below are defined for the landing procedure
     uint8_t landingTriggered; // indicator of whether a landing command has been triggered (via setting g2.landingFlag to 1)
@@ -2031,10 +2043,14 @@ private:
     // is latched until Mode 29 exits or the vehicle disarms.
     bool motor_fault_confirmed = false;
     bool motor_fault_yaw_free_latched = false;
+    bool motor_fault_severity_observable = false;
     uint8_t motor_fault_detected_id = 0;
     uint8_t motor_fault_candidate_id = 0;
     uint16_t motor_fault_confirm_count = 0;
     uint16_t motor_fault_recovery_count = 0;
+    uint16_t motor_fault_post_confirm_settle_count = 0;
+    int8_t motor_fault_update_direction = 0;
+    uint16_t motor_fault_update_direction_count = 0;
     float motor_fault_loss_estimate_pct = 0.0f;
     float motor_fault_residual_ratio = 1.0f;
     Vector3f motor_fault_sigma_filtered;
@@ -2079,7 +2095,8 @@ private:
                                                     Vector3f targetSnap,
                                                     Vector2f targetYaw,
                                                     Vector2f targetYaw_dot,
-                                                    Vector2f targetYaw_ddot);
+                                                    Vector2f targetYaw_ddot,
+                                                    bool reduced_attitude);
     VectorN<float, 4> L1AdaptiveAugmentation(VectorN<float, 4> thrustMomentCmd, bool suppress_yaw_control);
     VectorN<float,9> unit_vec(Vector3f q, Vector3f q_dot, Vector3f q_ddot);
     Matrix3f hatOperator(Vector3f input);
