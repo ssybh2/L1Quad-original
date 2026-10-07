@@ -57,6 +57,9 @@ MODE29_PARAMS = {
     "M29_TKOFF_T",
     "M29_SETTLE_T",
     "M29_MAX_TILT",
+    "M29_YAW_KD",
+    "M29_YAW_RMAX",
+    "M29_YAW_MMAX",
     "M29_GS_MODE",
     "M29_G50_KPX",
     "M29_G50_KPY",
@@ -247,6 +250,12 @@ def load_profile(path):
         raise ValueError("M29_SETTLE_T must be in [0.0, 15.0] s")
     if "M29_MAX_TILT" in requested and not (5.0 <= requested["M29_MAX_TILT"] <= 60.0):
         raise ValueError("M29_MAX_TILT must be in [5.0, 60.0] deg")
+    if "M29_YAW_KD" in requested and not (0.0 <= requested["M29_YAW_KD"] <= 0.2):
+        raise ValueError("M29_YAW_KD must be in [0.0, 0.2] N*m/(rad/s)")
+    if "M29_YAW_RMAX" in requested and not (30.0 <= requested["M29_YAW_RMAX"] <= 1500.0):
+        raise ValueError("M29_YAW_RMAX must be in [30, 1500] deg/s")
+    if "M29_YAW_MMAX" in requested and not (0.0 <= requested["M29_YAW_MMAX"] <= 0.5):
+        raise ValueError("M29_YAW_MMAX must be in [0.0, 0.5] N*m")
     if "M29_GS_MODE" in requested and requested["M29_GS_MODE"] not in (0.0, 1.0, 2.0):
         raise ValueError("M29_GS_MODE must be 0, 1, or 2")
     if "M29_G50_KPX" in requested and not (0.0 <= requested["M29_G50_KPX"] <= 50.0):
