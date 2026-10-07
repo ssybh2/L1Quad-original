@@ -296,6 +296,19 @@
  #define M29_MAX_TILT_DEFAULT       30.0f
 #endif
 
+// Free-yaw protection defaults. Heading is deliberately uncontrolled during
+// a severe motor-fault candidate/confirmation; these values only damp body-z
+// rate using secondary actuator authority left after F/Mx/My are satisfied.
+#ifndef M29_YAW_KD_DEFAULT
+ #define M29_YAW_KD_DEFAULT          0.02f
+#endif
+#ifndef M29_YAW_RMAX_DEFAULT
+ #define M29_YAW_RMAX_DEFAULT      360.0f
+#endif
+#ifndef M29_YAW_MMAX_DEFAULT
+ #define M29_YAW_MMAX_DEFAULT        0.12f
+#endif
+
 // Mode29 geometric-controller gain/tilt scheduling defaults. Scheduling is
 // disabled unless M29_GS_MODE is explicitly enabled. Anchor values mirror the
 // current real-airframe working profile so enabling the feature before tuning
