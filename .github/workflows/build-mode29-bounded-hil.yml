@@ -22,6 +22,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 tools/test_mode29_pair_math.py
+          python3 tools/test_mode29_bounded_hil_contract.py
           grep -q 'GSCALAR(m29_balloc_en, "M29_BALLOC", 0)' L1AC_customization/ArduCopter/Parameters.cpp
           grep -q 'update_bounded_pair_mode(motor_degradation_active,requested' L1AC_customization/ArduCopter/mode_adaptive.cpp
           grep -q 'motor_bounded_recovery_cooldown_until_ms' L1AC_customization/ArduCopter/mode_adaptive.cpp
