@@ -1,7 +1,8 @@
 # EXPERIMENTAL ONLY — matched opposite rotor derating, self-spin, NED 0,0,-1.
 # Any injected loss from 0 to 100% is accepted. FDI and controllability are separate questions.
 # Do not use these values as proven physical/real-flight parameters.
-# Yaw nullspace damping and hard yaw clipping are not applied when pair mode is enabled.
+# Yaw angle is free; a 10%-step body-yaw-rate soft ceiling uses actual rotor torque.
+# Speed cap can overshoot when actuator authority is insufficient; independent abort remains.
 # Softdrone Mode29 MuJoCo configuration
 #
 # Controller coordinates:
@@ -150,6 +151,37 @@ loss_filter_alpha = 0.08
 max_loss_step_percent = 2.5
 confidence_gate = 0.20
 
+# Starting/UNVALIDATED gain values for 10%-step tuning.
+# Edit these independently; each interpolation between two anchors is linear.
+# The original calibrated >=50% anchors below are preserved.
+[gain_schedule.loss_10]
+kp = [4.3, 1.9, 10.0]
+kv = [3.6, 3.6, 5.2]
+kr = [1.0, 0.38, 0.21]
+ko = [0.1, 0.2, 0.1]
+max_tilt_deg = 30.0
+
+[gain_schedule.loss_20]
+kp = [4.6, 2.8, 10.0]
+kv = [3.2, 3.2, 4.4]
+kr = [1.0, 0.41, 0.22]
+ko = [0.1, 0.2, 0.1]
+max_tilt_deg = 30.0
+
+[gain_schedule.loss_30]
+kp = [4.9, 3.7, 10.0]
+kv = [2.8, 2.8, 3.6]
+kr = [1.0, 0.44, 0.23]
+ko = [0.1, 0.2, 0.1]
+max_tilt_deg = 30.0
+
+[gain_schedule.loss_40]
+kp = [5.2, 4.6, 10.0]
+kv = [2.4, 2.4, 2.8]
+kr = [1.0, 0.47, 0.24]
+ko = [0.1, 0.2, 0.1]
+max_tilt_deg = 30.0
+
 [gain_schedule.loss_50]
 kp = [5.5, 5.5, 10.0]
 kv = [2.0, 2.0, 2.0]
@@ -194,6 +226,19 @@ max_tilt_deg = 30.0
 
 # Observer-confirmed diagonal rotor matching is deliberately opt-in.
 # Keep this base configuration unchanged for single-motor FDI comparison.
+# 10%-step editable speed envelope. Example INITIAL values, not tuned.
+# Values correspond to loss=[0,10,20,30,40,50,60,70,80,90,100] percent.
+# Intermediate fault percentages use LINEAR interpolation.
+# This is physical rotor moment feedback; NO manual clipping of gyro state.
+[yaw_rate_schedule]
+enabled = true
+loss_nodes_percent = [0,10,20,30,40,50,60,70,80,90,100]
+max_yaw_rate_deg_s = [180,180,180,180,180,180,180,180,180,180,180]
+brake_start_fraction = 0.75
+rate_gain_nm_per_rps = 0.08
+max_corrective_moment_nm = 0.20
+hard_abort_multiplier = 1.6
+
 [opposite_pair]
 enabled = true
 source = "fdi"  # fdi=blind estimator; oracle=ground-truth simulation diagnostic only
