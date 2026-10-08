@@ -303,6 +303,10 @@
 #ifndef M29_GS_MODE_DEFAULT
  #define M29_GS_MODE_DEFAULT        0
 #endif
+// Opposite-motor matching experiment disabled by default.
+#ifndef M29_PAIR_EN_DEFAULT
+ #define M29_PAIR_EN_DEFAULT        0
+#endif
 #ifndef M29_GS_KPX_DEFAULT
  #define M29_GS_KPX_DEFAULT         4.0f
 #endif
