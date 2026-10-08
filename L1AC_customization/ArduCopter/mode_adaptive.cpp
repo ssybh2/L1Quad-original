@@ -479,6 +479,8 @@ bool ModeAdaptive::init(bool ignore_checks)
     motor_bounded_injected_motor_id = 0U;
     motor_bounded_recovery_active = false;
     motor_bounded_recovery_cooldown_until_ms = 0U;
+    motor_bounded_fault_seen_this_run = false;
+    motor_bounded_position_outside_since_ms = 0U;
     motor_bounded_yaw_min_nm = 0.0f;
     motor_bounded_yaw_max_nm = 0.0f;
     motor_bounded_yaw_unbrakeable = false;
@@ -1900,6 +1902,33 @@ void ModeAdaptive::run()
 
     if (yaw_free_active) {
         thrustMomentCmd[3] = 0.0f;
+    }
+
+    if (motor_bounded_enabled_this_run) {
+        // Controlled lab-fault guard applies during injection AND recovery,
+        // independent of the failure percentage. Abort the experiment after
+        // persistent loss of position, not on a single noisy EKF frame.
+        motor_bounded_fault_seen_this_run |= motor_degradation_active;
+        if (motor_bounded_fault_seen_this_run) {
+            Vector3f position;
+            if (!ahrs.get_relative_position_NED_origin(position) ||
+                !mode29_finite(position)) {
+                abort_mode29("HIL navigation invalid during fault/recovery");
+                return;
+            }
+            const Vector3f error=position-targetPos;
+            if (error.length()>0.80f) {
+                if (motor_bounded_position_outside_since_ms==0U) {
+                    motor_bounded_position_outside_since_ms=AP_HAL::millis();
+                } else if (AP_HAL::millis()-
+                            motor_bounded_position_outside_since_ms>=60U) {
+                    abort_mode29("HIL fault/recovery position error >0.80m");
+                    return;
+                }
+            } else {
+                motor_bounded_position_outside_since_ms=0U;
+            }
+        }
     }
 
     uint8_t LandFlag = 0;
