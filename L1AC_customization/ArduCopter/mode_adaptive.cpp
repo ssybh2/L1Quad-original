@@ -148,6 +148,63 @@ struct Mode29BoundedDiag {
 };
 
 #if REAL_OR_SITL
+// Non-allocating feasibility oracle for the CURRENT requested collective,
+// roll and pitch, before any synthetic opposite-motor loss is committed.
+// At fixed F/Mx/My all four thrusts differ by s*[+,+,-,-]; the exact
+// positive/capacity bounds intersect iff [lo,hi] is nonempty.
+bool mode29_primary_interval(const VectorN<float, 4> &cmd,
+                             const float eta[4],
+                             float &lo, float &hi, float base[4])
+{
+    constexpr float L=0.28f, D=0.28f;
+    const float mx=cmd[1], my=cmd[2], F=cmd[0];
+    const float signs[4]={1.0f,1.0f,-1.0f,-1.0f};
+    const float max_f=softdrone_thrust_from_w(100.0f);
+    float cap_sum=0.0f;
+    for (uint8_t i=0;i<4;i++) {
+        if (!isfinite(cmd[i]) || !isfinite(eta[i]) ||
+            eta[i]<0.0f || eta[i]>1.0f) { return false; }
+        cap_sum+=eta[i]*max_f;
+    }
+    if (F<-0.002f || F>cap_sum+0.002f) { return false; }
+    base[0]=0.25f*F-mx/(2.0f*L)+my/(2.0f*D);
+    base[1]=0.25f*F+mx/(2.0f*L)-my/(2.0f*D);
+    base[2]=0.25f*F+mx/(2.0f*L)+my/(2.0f*D);
+    base[3]=0.25f*F-mx/(2.0f*L)-my/(2.0f*D);
+    lo=-1.0e6f; hi=1.0e6f;
+    for (uint8_t i=0;i<4;i++) {
+        const float a=-base[i]/signs[i];
+        const float b=(eta[i]*max_f-base[i])/signs[i];
+        lo=MAX(lo,MIN(a,b)); hi=MIN(hi,MAX(a,b));
+    }
+    return lo<=hi+1.0e-5f;
+}
+
+// Yaw authority is evaluated using the exact primary-wrench interval;
+// this lets high-spin behavior prefer whichever attainable mirror fraction
+// has MORE braking authority, rather than automatically undoing the pair.
+bool mode29_primary_yaw_interval(const VectorN<float, 4> &cmd,
+                                 const float eta[4],
+                                 float &yaw_min,float &yaw_max)
+{
+    float lo,hi,base[4];
+    if (!mode29_primary_interval(cmd,eta,lo,hi,base)) { return false; }
+    const float sign[4]={1.0f,1.0f,-1.0f,-1.0f};
+    const float cap=softdrone_thrust_from_w(100.0f);
+    const auto moment_at=[&](float s) -> float {
+        float out=0.0f;
+        for (uint8_t i=0;i<4;i++) {
+            const float fi=constrain_float(base[i]+s*sign[i],0.0f,eta[i]*cap);
+            out+=sign[i]*softdrone_moment_from_w(
+                softdrone_w_from_thrust(fi));
+        }
+        return out;
+    };
+    const float a=moment_at(lo),b=moment_at(hi);
+    yaw_min=MIN(a,b); yaw_max=MAX(a,b);
+    return isfinite(yaw_min)&&isfinite(yaw_max);
+}
+
 // Constrained 4-rotor actuator allocation. Fixed-size stack arrays,
 // deterministic CPU work, no dynamic allocation and no negative thrust.
 // Lexicographic priority: feasible collective -> nearest roll/pitch at fixed
