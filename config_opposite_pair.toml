@@ -56,6 +56,10 @@ settle_time_s = 2.0
 
 [safety]
 max_tilt_deg = 30.0
+# General-purpose controlled abort if faulted flight diverges. Simulation
+# safety ceiling (not the stricter 0.5m regression acceptance criterion).
+position_divergence_abort_m = 0.80
+position_divergence_hold_s = 0.06
 
 [gains]
 kpx = 4.0
