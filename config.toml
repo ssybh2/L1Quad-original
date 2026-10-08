@@ -116,6 +116,7 @@ sigma_filter_alpha = 0.15
 baseline_alpha_fast = 0.02
 baseline_alpha_slow = 0.0005
 confirmed_loss_update_gain = 0.15
+recovery_cooldown_s = 2.0
 confirmed_fit_limit = 0.55
 
 # After recovery, keep yaw angle free but damp yaw rate. This compensates for
@@ -206,6 +207,8 @@ enabled = false
 source = "fdi"
 min_allocation_reciprocal_condition = 1.0e-5
 max_estimate_bias_percent = 8.0
+severity_settle_time_s = 0.12
+severity_step_tolerance_pp = 1.0
 min_static_thrust_margin = 1.5
 max_body_yaw_rate_rps = 4.0
 max_xy_error_m = 0.5
