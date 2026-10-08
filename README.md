@@ -20,6 +20,24 @@ Fast headless experiment:
 .\run.ps1 -Pair -LossPercent 60 -Headless -NoRealtime
 ```
 
+**Important blind-estimator result:** Initial GitHub Actions smoke testing
+finished successfully but `FDI confirmed at: not detected` and
+`pair engaged at: never` for the 60% case. The first blind-mode run therefore
+does **not** prove the new paired controller works. The observer estimate
+was often below the source firmware's 60% confirmation threshold.
+
+To test the *paired allocation and spinning physics separately*, you can
+explicitly enable the SIMULATION-ONLY oracle comparison:
+
+```powershell
+.\run.ps1 -Pair -Oracle -LossPercent 60 -Headless -NoRealtime
+```
+
+The `-Oracle` switch substitutes the **known injected fault ID and percentage
+for the paired controller only**. It is *not* blind identification, does not
+validate the FDI and does not exist in the flight firmware. `-Pair` without
+`-Oracle` keeps blind FDI as the only possible activation source.
+
 To compare against your original single-motor recovery behavior, omit `-Pair`:
 
 ```powershell
