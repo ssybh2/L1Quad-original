@@ -110,7 +110,7 @@ def paired_primary_feasibility(mixer, cmd, failed_motor_id, loss_percent,
         np.array([1., -1., 1., -1.]) * float(mixer.D) * .5,
     ))
     a = b @ np.diag(eta)
-    empty = {"feasible": False, "reason": "rank deficient", "eta": eta,
+    empty = {"feasible": False, "reason": "uncontrollable primary wrench (rank deficient)", "eta": eta,
              "interval_width_n": 0.0}
     if np.linalg.matrix_rank(a, tol=1e-8) < 3:
         return empty
