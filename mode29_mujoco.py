@@ -12,6 +12,7 @@ import mujoco.viewer
 import numpy as np
 from opposite_pair_sim import (OppositePairExperiment, allocate_opposite_pair,
                                apply_opposite_model_loss)
+from yaw_rate_schedule import YawRateEnvelope, allocate_pair_yaw_control
 
 
 # Controller NED/FRD <-> MuJoCo NWU/FLU.
@@ -1427,6 +1428,7 @@ def run(cfg):
     pair = OppositePairExperiment(
         cfg.get("opposite_pair", {}), v, motor, float(cfg["safety"]["max_tilt_deg"])
     )
+    yaw_envelope = YawRateEnvelope(cfg.get("yaw_rate_schedule", {}))
 
     log_path = Path(sim["log_csv"])
     if not log_path.is_absolute():
@@ -1461,6 +1463,9 @@ def run(cfg):
         "pair_opposite_motor","pair_loss_estimate_pct","pair_static_margin",
         "pair_estimate_bias_pp","pair_xy_error_m","pair_z_error_m",
         "pair_disengaged_time_s","pair_guard_reason",
+        "pair_yaw_cap_deg_s","pair_yaw_hard_abort_rps",
+        "pair_yaw_brake_cmd_nm","pair_yaw_allocated_nm",
+        "pair_yaw_min_nm","pair_yaw_max_nm","pair_yaw_saturated",
         "fdi_state","fdi_motor","fdi_candidate","fdi_confirm_count","fdi_recovery_count",
         "fdi_loss_estimate_pct","fdi_residual_ratio","fdi_sigma_mx","fdi_sigma_my","fdi_sigma_mz",
         "schedule_mode","schedule_raw_loss_pct","schedule_loss_pct","schedule_confidence",
@@ -1493,6 +1498,10 @@ def run(cfg):
         )
     print(f"blind FDI        : {'ON' if detector.enabled else 'OFF'}")
     print(f"opposite pair    : {('ENABLED source='+pair.source) if pair.enabled else 'OFF / original mode'}")
+    print(f"yaw envelope     : {('10% anchors / motor torque feedback' if yaw_envelope.enabled else 'OFF')}")
+    if yaw_envelope.enabled:
+        print("yaw rate nodes   :", list(zip(yaw_envelope.nodes.astype(int).tolist(), yaw_envelope.limits.tolist())))
+
     if detector.yaw_rate_safety_limit_enabled:
         print(f"yaw-rate safety  : +/-{detector.yaw_rate_safety_limit:.3f} rad/s (yaw-free only)")
     else:
@@ -1519,6 +1528,8 @@ def run(cfg):
     l1_hold_until = 0.0
     yaw_rate_prelimit_rps = float((S @ data.qvel[3:6])[2])
     yaw_rate_limiter_active = False
+    yaw_feedback_request = 0.0
+    yaw_allocation_diag = {}
 
     try:
         with log_path.open("w", newline="", encoding="utf-8") as f:
@@ -1552,7 +1563,7 @@ def run(cfg):
                 pair.update(
                     data.time, meas_pos, meas_Omega,
                     float(traj["takeoff_altitude_m"]), fault_active_now,
-                    fault, detector,
+                    fault, detector, yaw_envelope=yaw_envelope,
                 )
                 candidate_protection_active = (
                     not detector.confirmed
@@ -1582,6 +1593,13 @@ def run(cfg):
                 )
                 controller.set_tuning(active_tuning)
 
+                yaw_feedback_request = 0.0
+                yaw_allocation_diag = {}
+                if pair.active and yaw_envelope.enabled:
+                    yaw_feedback_request = yaw_envelope.requested_moment(
+                        pair.estimated_loss_percent, meas_Omega[2]
+                    )
+
                 yaw_free_active = detector.yaw_free_latched or candidate_protection_active or (
                     fault_active_now and fault.request_yaw_free and not fault.blind_fdi
                 ) or pair.active or (pair.enabled and pair.activated_at_s is not None)
@@ -1606,9 +1624,10 @@ def run(cfg):
                     cmd = out["cmd"].copy()
                     if yaw_free_active:
                         if pair.enabled:
-                            # Pair experiment releases yaw without rate damping;
-                            # measured spin and its abort guard remain observable.
-                            cmd[3] = 0.0
+                            # This does not hold a yaw *heading*. When paired,
+                            # regulate body yaw speed through actuator reaction
+                            # torque while keeping position/Roll/Pitch primary.
+                            cmd[3] = yaw_feedback_request if pair.active else 0.0
                         elif detector.confirmed or candidate_protection_active:
                             # Keep yaw angle free during the fault and damp only
                             # its rate through the allocator's null-space authority.
@@ -1647,11 +1666,18 @@ def run(cfg):
                         raise RuntimeError(f"invalid L1-augmented output: {total_cmd}")
 
                     if pair.active:
-                        allocator_mode = "opposite_pair_fdi_yaw_free"
-                        w_cmd = allocate_opposite_pair(
-                            mixer, total_cmd,
-                            pair.failed_motor_id, pair.estimated_loss_percent,
-                        )
+                        if yaw_envelope.enabled:
+                            allocator_mode = "opposite_pair_yaw_rate_feedback"
+                            w_cmd, yaw_allocation_diag = allocate_pair_yaw_control(
+                                mixer, total_cmd, pair.failed_motor_id,
+                                pair.estimated_loss_percent, yaw_feedback_request,
+                            )
+                        else:
+                            allocator_mode = "opposite_pair_fdi_yaw_free"
+                            w_cmd = allocate_opposite_pair(
+                                mixer, total_cmd,
+                                pair.failed_motor_id, pair.estimated_loss_percent,
+                            )
                     elif protection_active:
                         allocator_mode = (
                             "fdi_effectiveness_aware"
@@ -1783,6 +1809,16 @@ def run(cfg):
                         pair.disengaged_at_s if pair.disengaged_at_s is not None else ""
                     ),
                     "pair_guard_reason":pair.reason,
+                    "pair_yaw_cap_deg_s":(
+                        yaw_envelope.limit_deg_s(pair.estimated_loss_percent)
+                        if pair.active and yaw_envelope.enabled else 0.0
+                    ),
+                    "pair_yaw_hard_abort_rps":pair.yaw_abort_limit_rps if pair.active else 0.0,
+                    "pair_yaw_brake_cmd_nm":yaw_feedback_request,
+                    "pair_yaw_allocated_nm":yaw_allocation_diag.get("predicted_yaw_nm", 0.0),
+                    "pair_yaw_min_nm":yaw_allocation_diag.get("available_yaw_min_nm", 0.0),
+                    "pair_yaw_max_nm":yaw_allocation_diag.get("available_yaw_max_nm", 0.0),
+                    "pair_yaw_saturated":int(yaw_allocation_diag.get("saturated", False)),
                     "fdi_state":detector.state,
                     "fdi_motor":detector.detected_id,
                     "fdi_candidate":detector.candidate_id,
