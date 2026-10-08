@@ -58,6 +58,7 @@ MODE29_PARAMS = {
     "M29_SETTLE_T",
     "M29_MAX_TILT",
     "M29_GS_MODE",
+    "M29_PAIR_EN",
     "M29_G50_KPX",
     "M29_G50_KPY",
     "M29_G50_KPZ",
@@ -249,6 +250,8 @@ def load_profile(path):
         raise ValueError("M29_MAX_TILT must be in [5.0, 60.0] deg")
     if "M29_GS_MODE" in requested and requested["M29_GS_MODE"] not in (0.0, 1.0, 2.0):
         raise ValueError("M29_GS_MODE must be 0, 1, or 2")
+    if "M29_PAIR_EN" in requested and requested["M29_PAIR_EN"] not in (0.0, 1.0):
+        raise ValueError("M29_PAIR_EN must be 0 or 1")
     if "M29_G50_KPX" in requested and not (0.0 <= requested["M29_G50_KPX"] <= 50.0):
         raise ValueError("M29_G50_KPX must be in [0, 50]")
     if "M29_G50_KPY" in requested and not (0.0 <= requested["M29_G50_KPY"] <= 50.0):
