@@ -1952,11 +1952,13 @@ public:
     static constexpr float MOTOR_FDI_MAX_RESIDUAL_RATIO = 0.35f;
     static constexpr float MOTOR_FDI_MIN_RP_MOMENT = 0.20f;          // N*m
 
-    // Experimental opposite-pair effectiveness matching: hard-coded containment.
-    // Kept independent of 2026-10-07 yaw-damping/reduced-attitude changes.
-    // At 100% paired loss only two live actuators remain: F/Roll/Pitch
-    // become rank deficient, so do not permit nearly complete paired failures.
-    static constexpr float MOTOR_PAIR_MAX_LOSS_PCT = 70.0f;
+    // Experimental opposite-pair effectiveness matching, all injected loss
+    // fractions from 0..100% accepted. Feasibility is evaluated using
+    // effectiveness/rank and static thrust margin, NOT a hard loss cutoff.
+    // Complete opposite-pair outage loses one independent control axis.
+    // Only used when M29_PAIR_EN=1; baseline FDI thresholds remain intact.
+    static constexpr float MOTOR_PAIR_MIN_ESTIMATED_RP_MOMENT = 0.02f;
+    static constexpr float MOTOR_PAIR_MIN_EFFECTIVENESS = 1.0e-3f;
     static constexpr float MOTOR_PAIR_MAX_ESTIMATE_BIAS_PCT = 8.0f;
     static constexpr float MOTOR_PAIR_MIN_STATIC_MARGIN = 1.5f;
     static constexpr float MOTOR_PAIR_MAX_SPIN_RAD_S = 4.0f;
