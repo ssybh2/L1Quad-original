@@ -469,19 +469,17 @@ void ModeAdaptive::update_motor_pair_mode(bool motor_degradation_active)
         return;
     }
 
-    if (motor_fault_loss_estimate_pct <
-            100.0f * MOTOR_FDI_MIN_LOSS_FRACTION ||
+    if (motor_fault_loss_estimate_pct <= 0.0f ||
         motor_fault_residual_ratio > MOTOR_FDI_MAX_RESIDUAL_RATIO) {
         return;
     }
 
     const float loss_pct =
         constrain_float(motor_fault_loss_estimate_pct, 0.0f, 100.0f);
-    if (loss_pct > MOTOR_PAIR_MAX_LOSS_PCT ||
-        motor_degradation_loss_pct > MOTOR_PAIR_MAX_LOSS_PCT) {
-        motor_pair_inhibited = true;
-        GCS_SEND_TEXT(MAV_SEVERITY_CRITICAL,
-                      "Mode29 pair blocked: loss exceeds safe experiment envelope");
+    // No special severity percentage. At a complete opposite pair outage,
+    // the remaining two live motors cannot span F/Mx/My independently.
+    // A near-singular mixer is also rejected based on effectiveness.
+    if (loss_pct <= 0.0f) {
         return;
     }
     // Experimental truth is read solely to refuse dangerously asymmetric
@@ -494,6 +492,12 @@ void ModeAdaptive::update_motor_pair_mode(bool motor_degradation_active)
         return;
     }
     const float eta = 1.0f - 0.01f * loss_pct;
+    if (eta <= MOTOR_PAIR_MIN_EFFECTIVENESS) {
+        motor_pair_inhibited = true;
+        GCS_SEND_TEXT(MAV_SEVERITY_CRITICAL,
+                      "Mode29 pair blocked: two-motor allocation rank deficient");
+        return;
+    }
 
 #if REAL_OR_SITL
     // Use only the thrust-stand validated range (<= 1800 us) for the guard.
@@ -634,13 +638,9 @@ ModeAdaptive::GainScheduleSet ModeAdaptive::gain_schedule_at_loss(float loss_pct
 
     const float loss = constrain_float(loss_pct, 0.0f, 100.0f);
 
-    // Preserve the proven normal controller below 45% loss. Blend smoothly
-    // into the first 50% calibrated anchor over 45..50%.
-    if (loss <= 45.0f) {
-        return base;
-    }
-    if (loss < 50.0f) {
-        return interpolate(base, anchors[0], (loss - 45.0f) / 5.0f);
+    // Every severity receives an interpolated gain, including 0..50%.
+    if (loss <= 50.0f) {
+        return interpolate(base, anchors[0], loss / 50.0f);
     }
 
     if (loss >= 100.0f) {
@@ -682,7 +682,7 @@ void ModeAdaptive::update_gain_schedule(bool motor_degradation_active)
         const bool estimate_valid =
             isfinite(motor_fault_loss_estimate_pct) &&
             isfinite(motor_fault_residual_ratio) &&
-            motor_fault_loss_estimate_pct >= 40.0f &&
+            motor_fault_loss_estimate_pct > 0.0f &&
             (motor_fault_confirmed || motor_fault_residual_ratio <= fit_limit);
 
         if (estimate_valid) {
@@ -890,10 +890,15 @@ void ModeAdaptive::update_auto_motor_fault_detector(float time_in_this_run)
             motor_fault_loss_estimate_pct = 100.0f * loss_fraction;
         }
 
+        const float release_loss =
+            motor_pair_enabled_this_run ? 0.0f :
+            (100.0f * MOTOR_FDI_RELEASE_LOSS_FRACTION);
+        const float min_rp_moment =
+            motor_pair_enabled_this_run ? MOTOR_PAIR_MIN_ESTIMATED_RP_MOMENT :
+            MOTOR_FDI_MIN_RP_MOMENT;
         const bool recovered =
-            motor_fault_loss_estimate_pct <=
-                100.0f * MOTOR_FDI_RELEASE_LOSS_FRACTION &&
-            (observed_norm < MOTOR_FDI_MIN_RP_MOMENT ||
+            motor_fault_loss_estimate_pct <= release_loss &&
+            (observed_norm < min_rp_moment ||
              motor_fault_residual_ratio <= 0.55f);
 
         if (recovered) {
@@ -925,8 +930,11 @@ void ModeAdaptive::update_auto_motor_fault_detector(float time_in_this_run)
         return;
     }
 
+    const float min_rp_moment =
+        motor_pair_enabled_this_run ? MOTOR_PAIR_MIN_ESTIMATED_RP_MOMENT :
+        MOTOR_FDI_MIN_RP_MOMENT;
     if (!isfinite(observed_norm) ||
-        observed_rp < MOTOR_FDI_MIN_RP_MOMENT) {
+        observed_rp < min_rp_moment) {
         motor_fault_sigma_baseline =
             motor_fault_sigma_baseline +
             (motor_fault_sigma_filtered - motor_fault_sigma_baseline) *
@@ -973,9 +981,12 @@ void ModeAdaptive::update_auto_motor_fault_detector(float time_in_this_run)
     motor_fault_loss_estimate_pct = 100.0f * best_loss;
     motor_fault_residual_ratio = best_ratio;
 
+    // Opt-in experiment confirms from residual geometry and persistence,
+    // not by comparing a failure with a fixed 60% threshold.
+    const float min_confirm_loss =
+        motor_pair_enabled_this_run ? 0.0f : MOTOR_FDI_MIN_LOSS_FRACTION;
     const bool severe_candidate =
-        best_motor != 0 &&
-        best_loss >= MOTOR_FDI_MIN_LOSS_FRACTION &&
+        best_motor != 0 && best_loss > min_confirm_loss &&
         best_ratio <= MOTOR_FDI_MAX_RESIDUAL_RATIO;
 
     if (!severe_candidate) {
