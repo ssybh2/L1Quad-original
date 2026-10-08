@@ -2,6 +2,7 @@
 
 The initial 2026-10-08 change lives in `feature/mode29-fdi-antiwindup-hil-20261008`.
 Its 2026-10-08 follow-up lives in `feature/mode29-fdi-robust-hil-20261008`.
+The superseding v2 experimental build lives in `feature/mode29-fdi-robust-v2-hil-20261008`.
 It branches from successful `f31362c` bounded-HIL firmware. It is
 **not flight qualified**, especially for motor-fault experiments with
 propellers attached. Do not promote to flight without new closed-loop
@@ -147,3 +148,27 @@ new opt-in candidate persistence/fit/excitation gates.
 These Python tests remain simplified **offline contract and arithmetic**
 checks, not flight-qualified actuator or closed-loop validation.
 Perform no-propeller bench/HIL tests before considering any real flight.
+
+## v2 bug fix: weak-fault release hysteresis
+
+The first robustness pass introduced an opt-in 15% confirmation floor but
+left the legacy 35% *recovery* threshold unchanged. This could falsely
+declare any correctly confirmed 20..30% fault as recovered after the
+recovery persistence window, even while the fault continued. That v1
+image is not a suitable low-loss verification baseline.
+
+The v2 firmware snapshots `motor_fdi_confirmed_loss_pct` at the moment
+an HIL FDI confirmation is accepted, and applies this adaptive release
+hysteresis when `M29_BALLOC=1` and `M29_PAIR_EN=0`:
+
+`release_loss_pct = clamp(0.5 * confirmed_loss_pct, 5, 35)`
+
+Examples: 20% confirmed -> 10% release, 30% -> 15%, 50% -> 25%,
+70% -> 35%. The 40-sample recovery persistence and model-fit/low-moment
+checks remain required. Default `M29_BALLOC=0` still uses the original
+35% release condition, while the paired experiment retains its existing
+zero-loss release gate.
+
+This hysteresis is a conservative experiment design, not proof that
+real motor effectiveness is observed correctly. Build and log comparisons
+MUST identify the exact v2 commit SHA to distinguish it from prior CI runs.
