@@ -1316,8 +1316,8 @@ class GainScheduler:
             for key in ("kp", "kv", "kr", "ko"):
                 if self.anchors[loss][key].shape != (3,) or not np.isfinite(self.anchors[loss][key]).all():
                     raise ValueError(f"loss_{loss}.{key} must contain 3 finite gains")
-            if not (5.0 <= self.anchors[loss]["max_tilt_deg"] <= 60.0):
-                raise ValueError(f"loss_{loss}.max_tilt_deg must be in [5,60] degrees")
+            if not (5.0 <= self.anchors[loss]["max_tilt_deg"] <= 90.0):
+                raise ValueError(f"loss_{loss}.max_tilt_deg must be in [5,90] degrees; the controller clips to 60")
         self.alpha = float(cfg.get("loss_filter_alpha", 0.08))
         self.max_step = float(cfg.get("max_loss_step_percent", 2.5))
         self.confidence_gate = float(cfg.get("confidence_gate", 0.20))
