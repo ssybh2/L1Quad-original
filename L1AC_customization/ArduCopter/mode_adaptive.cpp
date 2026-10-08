@@ -1153,7 +1153,12 @@ void ModeAdaptive::update_gain_schedule(bool motor_degradation_active)
             isfinite(motor_fault_loss_estimate_pct) &&
             isfinite(motor_fault_residual_ratio) &&
             motor_fault_loss_estimate_pct > 0.0f &&
-            (motor_fault_confirmed || motor_fault_residual_ratio <= fit_limit);
+            // In the HIL anti-windup path, provisional one-motor
+            // candidates are *not* sufficiently trusted to schedule
+            // geometric gains before identity confirmation.
+            (motor_bounded_enabled_this_run ? motor_fault_confirmed :
+             (motor_fault_confirmed ||
+              motor_fault_residual_ratio <= fit_limit));
 
         if (estimate_valid) {
             raw_loss = constrain_float(motor_fault_loss_estimate_pct, 0.0f, 100.0f);
