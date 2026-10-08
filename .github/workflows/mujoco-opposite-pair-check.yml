@@ -32,6 +32,7 @@ jobs:
             python mode29_mujoco.py --config config_opposite_pair.toml --headless --no-realtime --duration 36 --loss-percent "$loss"
             cp logs/mode29_opposite_pair.csv "logs/mode29_opposite_pair_blind_${loss}_recovery.csv"
             python analyze_pair_log.py "logs/mode29_opposite_pair_blind_${loss}_recovery.csv"
+            python tools/check_pair_regression.py "logs/mode29_opposite_pair_blind_${loss}_recovery.csv" --loss "$loss"
           done
       - name: Oracle headless control-allocation comparison (SIM ONLY)
         run: |
