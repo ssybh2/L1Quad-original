@@ -484,6 +484,15 @@ void ModeAdaptive::update_motor_pair_mode(bool motor_degradation_active)
                       "Mode29 pair blocked: loss exceeds safe experiment envelope");
         return;
     }
+    // Experimental truth is read solely to refuse dangerously asymmetric
+    // mirrored failures; it is never substituted for the FDI estimate.
+    if (fabsf(loss_pct - motor_degradation_loss_pct) >
+        MOTOR_PAIR_MAX_ESTIMATE_BIAS_PCT) {
+        motor_pair_inhibited = true;
+        GCS_SEND_TEXT(MAV_SEVERITY_CRITICAL,
+                      "Mode29 pair blocked: FDI severity disagrees with injector");
+        return;
+    }
     const float eta = 1.0f - 0.01f * loss_pct;
 
 #if REAL_OR_SITL
