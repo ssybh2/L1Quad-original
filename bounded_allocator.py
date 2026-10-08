@@ -133,7 +133,7 @@ def bounded_allocate(mixer, cmd, degraded_motor_id, loss_percent):
     start, stop = lo, hi
     for _ in range(22):
         mid = .5*(start+stop)
-        if (yaw_moment(mid) < clipped_y) == increasing:
+        if (yaw_moment(mid) < clipped_yaw) == increasing:
             start = mid
         else:
             stop = mid
