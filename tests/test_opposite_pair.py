@@ -88,9 +88,31 @@ class OppositePairTests(unittest.TestCase):
         self.assertFalse(pair.active)
         self.assertTrue(pair.inhibited)
 
-    def test_high_loss_is_blocked(self):
-        with self.assertRaises(ValueError):
+    def test_arbitrary_loss_fractions(self):
+        motor = ToyMotor()
+        for loss in (0.0, 0.1, 1.0, 5.0, 12.5, 25.0,
+                     40.0, 50.0, 60.0, 75.0, 90.0, 99.0, 100.0):
+            with self.subTest(loss=loss):
+                w = np.array([60., 60., 60., 60.])
+                mirrored = apply_opposite_model_loss(w, motor, 2, loss)
+                self.assertAlmostEqual(motor.thrust(mirrored[1]),
+                                       (1.0-loss/100.)*motor.thrust(60.), places=9)
+                self.assertEqual(mirrored[0], 60.)
+                self.assertEqual(mirrored[2], 60.)
+                self.assertEqual(mirrored[3], 60.)
+
+    def test_rank_degeneracy_is_not_a_special_percentage_threshold(self):
+        # Full 100% diagonal loss is a rank-two actuator plant, not an
+        # arbitrary 'maximum allowed percentage' in the input model.
+        with self.assertRaisesRegex(RuntimeError, "rank-deficient"):
             allocate_opposite_pair(ToyMixer(), [15., 0., 0.], 1, 100.)
+        with self.assertRaises(ValueError):
+            allocate_opposite_pair(ToyMixer(), [15., 0., 0.], 1, 101.)
+        for loss in (0.0, 20.0, 60.0, 75.0):
+            w = allocate_opposite_pair(ToyMixer(), [10., 0., 0.], 1, loss)
+            self.assertTrue(np.isfinite(w).all())
+
+    def test_higher_than_70_can_engage_if_authority_exists(self):
         pair = OppositePairExperiment({"enabled": True},
                                       {"mass_kg": 1., "gravity_mps2": 9.8},
                                       ToyMotor(), 30.)
@@ -100,7 +122,18 @@ class OppositePairTests(unittest.TestCase):
             loss_estimate_percent=75., residual_ratio=.1
         )
         pair.update(5., [0., 0., -1.], [0., 0., 0.], 1., True, fault, detector)
-        self.assertTrue(pair.inhibited)
+        self.assertTrue(pair.active)
+
+    def test_exact_zero_injection_is_no_fault(self):
+        pair = OppositePairExperiment({"enabled": True, "source": "oracle"},
+                                      {"mass_kg": 1., "gravity_mps2": 9.8},
+                                      ToyMotor(), 30.)
+        fault = SimpleNamespace(motor_id=1, loss_percent=0.0)
+        detector = SimpleNamespace(confirmed=False, detected_id=0,
+                                   loss_estimate_percent=0., residual_ratio=1.0)
+        pair.update(5., [0., 0., -1.], [0., 0., 0.], 1., False, fault, detector)
+        self.assertFalse(pair.active)
+        self.assertFalse(pair.inhibited)
 
 
 if __name__ == "__main__":
