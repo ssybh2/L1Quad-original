@@ -59,10 +59,20 @@ errors). This experiment does not include any of the October 7
 
 
 
-The runtime motor-loss command accepts any value from 0% to 100%. RC11 maps
-linearly across that full range; e.g. 5% -> 1050 us, 50% -> 1500 us,
+The runtime motor-loss command accepts **any finite value from 0% to
+100%**, including decimals such as 7.5%, 23.7% and 91.3%. RC11 maps
+linearly across that full range; 5% -> 1050 us, 50% -> 1500 us,
 100% -> 2000 us. The percentage is a modeled thrust-effectiveness loss, not a
-raw PWM percentage.
+raw PWM percentage. **60% has no special status in the opt-in opposite-pair
+experiment.** The 50/60/.../100 gain anchors are interpolation points, not
+a list of permitted injections. The paired feature may reject activation
+when observer confidence or effective actuator control rank is insufficient;
+in particular, 100% paired loss leaves only two effective motors and cannot
+independently realize total thrust, roll and pitch.
+
+The original non-paired `M29_PAIR_EN=0` detector keeps the 2026-10-06
+flight-test thresholds. Do not assume detecting arbitrarily small faults
+is possible with a noisy IMU, nor interpret 0% injection as a motor failure.
 
 ## Install
 
