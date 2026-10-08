@@ -1460,7 +1460,7 @@ def run(cfg):
     pair = OppositePairExperiment(
         cfg.get("opposite_pair", {}), v, motor, float(cfg["safety"]["max_tilt_deg"])
     )
-    yaw_envelope = YawRateEnvelope(cfg.get("yaw_rate_schedule", {}))
+    yaw_envelope = YawRateEnvelope(cfg.get("yaw_rate_schedule", {}), cfg.get("gain_schedule", {}))
 
     log_path = Path(sim["log_csv"])
     if not log_path.is_absolute():
