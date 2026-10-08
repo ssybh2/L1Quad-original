@@ -1,0 +1,248 @@
+# EXPERIMENTAL ONLY — matched opposite rotor derating, self-spin, NED 0,0,-1.
+# This file intentionally uses 2026-10-06 FDI thresholds and 60% gain anchor.
+# Do not use these values as proven physical/real-flight parameters.
+# Yaw nullspace damping and hard yaw clipping are not applied when pair mode is enabled.
+# Softdrone Mode29 MuJoCo configuration
+#
+# Controller coordinates:
+#   world NED: +X forward/North, +Y right/East, +Z Down
+#   body  FRD: +X forward, +Y right, +Z down
+#
+# NOTE:
+# Noise/disturbance numbers below are intentionally synthetic starting values
+# for controller tuning. They are NOT claimed to be measured NOKOV/IMU/ESC noise.
+
+[simulation]
+duration_s = 36.0
+timestep_s = 0.0025
+realtime = true
+viewer = true
+print_period_s = 0.5
+log_csv = "logs/mode29_opposite_pair.csv"
+controller_origin_height_m = 0.35
+
+[visualization]
+# Final NED hover target [0,0,-1] is displayed as a red sphere.
+target_marker_radius_m = 0.05
+
+[initial_state]
+# You can freely edit the birth point.
+position_ned_m = [0.0, 0.0, 0.0]
+velocity_ned_mps = [0.0, 0.0, 0.0]
+
+# You requested that initial attitude not be hard-coded to a perfectly level
+# [0,0,0]. These are now editable non-zero defaults.
+# Format: [roll, pitch, yaw] degrees in NED/FRD convention.
+attitude_rpy_deg = [3.0, -2.0, 5.0]
+body_rate_frd_rps = [0.0, 0.0, 0.0]
+
+[vehicle]
+mass_kg = 1.3854
+gravity_mps2 = 9.8
+jxx_kgm2 = 0.02218
+jyy_kgm2 = 0.02256
+jzz_kgm2 = 0.03372
+
+# Exact current GitHub mixer spans.
+L_m = 0.28
+D_m = 0.28
+
+[trajectory]
+# Final target remains NED [0, 0, -1] with altitude=1.
+takeoff_altitude_m = 1.0
+takeoff_time_s = 10.0
+settle_time_s = 2.0
+
+[safety]
+max_tilt_deg = 30.0
+
+[gains]
+kpx = 4.0
+kpy = 1.0
+kpz = 10.0
+kvx = 4.0
+kvy = 4.0
+kvz = 6.0
+krx = 1.0
+kry = 0.35
+krz = 0.2
+kox = 0.1
+koy = 0.2
+koz = 0.1
+
+[controller]
+l1enable = 1
+enforce_firmware_entry_guard = false
+entry_max_xy_m = 0.50
+entry_max_z_m = 0.50
+
+# L1Quad adaptive augmentation. These are the current softdrone Mode29 flight
+# profile values; cutoff frequencies are in rad/s. Vehicle mass and inertia are
+# always read from [vehicle], so enabling L1 does not replace the plant model.
+[l1_adaptive]
+as_v = -10.0
+as_omega = -15.0
+cutoff_thrust_rad_s = 15.0
+cutoff_moment_1_rad_s = 5.0
+cutoff_moment_2_rad_s = 15.0
+
+# Reset and briefly synchronize the L1 predictor when FDI switches between the
+# normal and effectiveness-aware allocators. This prevents pre-switch
+# uncertainty from being replayed through the new input channel.
+topology_transition_hold_s = 0.5
+
+# Runtime Mode29 motor-efficiency experiment ported from
+# feature/mode29-position-gain-schedule. The physical vehicle and motor model
+# below are unchanged. The loss is injected only after takeoff + settle.
+[fault_injection]
+enabled = true
+motor_id = 1
+loss_percent = 60.0
+start_time_s = 16.0
+duration_s = 14.0
+
+# In a blind experiment the injector does not request yaw-free control. The
+# onboard detector must isolate the motor and release yaw automatically.
+blind_fdi = true
+request_yaw_free = false
+
+[fault_detection]
+enabled = true
+confirm_time_s = 0.060
+recovery_time_s = 0.100
+# The upstream firmware uses 60%; this MuJoCo observer uses 50% so a true 60%
+# loss is confirmed before the attitude excursion grows too large.
+min_loss_percent = 60.0
+release_loss_percent = 35.0
+max_residual_ratio = 0.35
+min_roll_pitch_moment_nm = 0.20
+sigma_filter_alpha = 0.05
+baseline_alpha_fast = 0.02
+baseline_alpha_slow = 0.0005
+confirmed_loss_update_gain = 0.05
+confirmed_fit_limit = 0.55
+
+# After recovery, keep yaw angle free but damp yaw rate. This compensates for
+# the ideal MuJoCo body having no aerodynamic yaw drag.
+post_recovery_yaw_rate_damping_nm_per_rps = 0.05
+post_recovery_max_yaw_moment_nm = 0.15
+
+# While a severe motor fault remains active, keep yaw angle free but use the
+# allocator's remaining null-space authority to prevent unbounded spin.
+fault_yaw_rate_damping_nm_per_rps = 0.05
+fault_max_yaw_moment_nm = 0.15
+
+# Simulation-only safety clamp while yaw-free control is active. The rate
+# controller remains the primary mechanism; this hard limit is a last-resort
+# guard for faults whose residual yaw moment cannot be cancelled by the motors.
+yaw_rate_safety_limit_enabled = false
+yaw_rate_safety_limit_rps = 20.0
+
+# disabled | oracle | automatic
+# automatic uses only the blind-FDI loss estimate. Oracle is useful when
+# calibrating one known loss anchor at a time.
+[gain_schedule]
+mode = "oracle"
+loss_filter_alpha = 0.08
+max_loss_step_percent = 2.5
+confidence_gate = 0.20
+
+[gain_schedule.loss_50]
+kp = [5.5, 5.5, 10.0]
+kv = [2.0, 2.0, 2.0]
+kr = [1.0, 0.5, 0.25]
+ko = [0.1, 0.2, 0.1]
+max_tilt_deg = 30.0
+
+[gain_schedule.loss_60]
+kp = [5.5, 5.5, 10.0]
+kv = [4.0, 4.0, 2.0]
+kr = [1.0, 0.5, 0.25]
+ko = [0.1, 0.2, 0.1]
+max_tilt_deg = 30.0
+
+[gain_schedule.loss_70]
+kp = [8.0, 8.0, 10.0]
+kv = [5.0, 5.0, 2.0]
+kr = [0.5, 0.5, 0.25]
+ko = [1.0, 1.0, 0.1]
+max_tilt_deg = 70.0
+
+[gain_schedule.loss_80]
+kp = [10.0, 10.0, 10.0]
+kv = [8.0, 8.0, 2.0]
+kr = [1.0, 0.5, 0.25]
+ko = [1.0, 1.0, 1.0]
+max_tilt_deg = 30.0
+
+[gain_schedule.loss_90]
+kp = [20.0, 20.0, 10.0]
+kv = [8.0, 8.0, 2.0]
+kr = [0.5, 0.5, 0.25]
+ko = [1.5, 1.5, 0.1]
+max_tilt_deg = 30.0
+
+[gain_schedule.loss_100]
+kp = [4.0, 4.0, 10.0]
+kv = [4.0, 4.0, 2.0]
+kr = [1.0, 0.5, 0.25]
+ko = [0.1, 0.2, 0.1]
+max_tilt_deg = 30.0
+
+# Observer-confirmed diagonal rotor matching is deliberately opt-in.
+# Keep this base configuration unchanged for single-motor FDI comparison.
+[opposite_pair]
+enabled = true
+max_loss_percent = 70.0
+max_estimate_bias_percent = 8.0
+min_static_thrust_margin = 1.5
+max_body_yaw_rate_rps = 4.0
+max_xy_error_m = 0.5
+max_z_error_m = 0.4
+
+[sensor_noise]
+enabled = true
+seed = 2904
+
+# Per-axis zero-mean white measurement noise.
+position_std_m = [0.003, 0.003, 0.005]
+velocity_std_mps = [0.015, 0.015, 0.020]
+attitude_std_deg = [0.12, 0.12, 0.20]
+gyro_std_rps = [0.003, 0.003, 0.004]
+
+# Fixed sensor/estimator offsets for one run.
+position_bias_m = [0.002, -0.001, 0.003]
+velocity_bias_mps = [0.002, -0.002, 0.001]
+attitude_bias_deg = [0.10, -0.08, 0.18]
+gyro_bias_rps = [0.0010, -0.0010, 0.0005]
+
+[motor_disturbance]
+enabled = true
+seed = 2905
+
+# Small rotor/ESC dynamics; tune when you have measured response data.
+time_constant_s = 0.030
+
+# Noise is in Mode29 command units w, where PWM_us = 1000 + 10*w.
+command_noise_std_w = 0.04
+
+# Fixed per-motor mismatch. 1.0 is nominal.
+# Motor order: M1 front-right, M2 rear-left, M3 front-left, M4 rear-right.
+thrust_scale = [1.015, 0.985, 1.010, 0.990]
+moment_scale = [1.010, 0.990, 1.015, 0.985]
+
+# Fast output scatter, expressed as a fraction of nominal output.
+thrust_noise_std_fraction = 0.006
+moment_noise_std_fraction = 0.010
+
+[motor_model]
+# Current 6S dead-zone cubic fit from the GitHub firmware.
+f_w_dead = 4.47703190
+f_c3 = -2.62683159e-5
+f_c2 =  4.01680390e-3
+f_c1 =  4.05756758e-8
+
+m_w_dead = 6.24726216
+m_c3 = -2.50608401e-7
+m_c2 =  3.84208303e-5
+m_c1 =  5.42809055e-4
