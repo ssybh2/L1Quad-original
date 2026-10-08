@@ -30,7 +30,7 @@ profile:
   name: mode29_geometric_gain_schedule
   airframe: softdrone
   description: Oracle/FDI gain and tilt schedule for Mode29 geometric control.
-  firmware_branch: feature/mode29-position-gain-schedule
+  firmware_branch: feature/mode29-from-60pct-20261006
 
 parameters:
   scheduler:
