@@ -110,8 +110,9 @@ request_yaw_free = false
 enabled = true
 confirm_time_s = 0.060
 recovery_time_s = 0.100
-# The upstream firmware uses 60%; this MuJoCo observer uses 50% so a true 60%
-# loss is confirmed before the attitude excursion grows too large.
+# FDI confirmation threshold follows the frozen Oct 6 firmware (60%).
+# A simulated 60% fault may NOT be confirmed due to observer bias; use
+# --pair-oracle *only* to isolate the control-allocation experiment.
 min_loss_percent = 60.0
 release_loss_percent = 35.0
 max_residual_ratio = 0.35
@@ -193,6 +194,7 @@ max_tilt_deg = 30.0
 # Keep this base configuration unchanged for single-motor FDI comparison.
 [opposite_pair]
 enabled = true
+source = "fdi"  # fdi=blind estimator; oracle=ground-truth simulation diagnostic only
 max_loss_percent = 70.0
 max_estimate_bias_percent = 8.0
 min_static_thrust_margin = 1.5
