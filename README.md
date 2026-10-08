@@ -72,6 +72,15 @@ Important research limitations:
 - No Oct 7 Yaw-damping firmware parameters were copied into this design.
   Existing original simulation damping remains available only in baseline mode.
 
+Diagnostic log: `logs/mode29_opposite_pair.csv`. Summarize it with:
+
+```powershell
+python .\analyze_pair_log.py .\logs\mode29_opposite_pair.csv
+```
+
+The summary reports FDI confirmation, paired time, guard exit reason,
+position error and injection-relative FDI bias.
+
 Diagnostic log: `logs/mode29_opposite_pair.csv`. New columns include
 `pair_active`, `pair_inhibited`, `pair_failed_motor`,
 `pair_opposite_motor`, `pair_loss_estimate_pct`,
