@@ -14,6 +14,56 @@ Firmware research reference: `feature/mode29-pixhawk-next-from-20261006`
 (base Oct 6 commit `2c606d7e`). This is a **simulation prototype**, not a
 verified flight-control solution.
 
+## Independently tune EACH 10% fault severity (including yaw-rate cap)
+
+In `config_opposite_pair.toml`, every 0%, 10%, ..., 100% loss has an **independent**
+`[gain_schedule.loss_N]` block. You can change `kp`, `kv`, `kr`,
+`ko`, `max_tilt_deg`, and `max_yaw_rate_deg_s` separately at every
+anchor without changing the others. None of the gain examples is a verified
+optimum.
+
+For example, the 90% tuning block may look like:
+
+```toml
+[gain_schedule.loss_90]
+kp = [20.0, 20.0, 10.0]
+kv = [8.0, 8.0, 2.0]
+kr = [0.5, 0.5, 0.25]
+ko = [1.5, 1.5, 0.1]
+max_tilt_deg = 30.0
+max_yaw_rate_deg_s = 180.0  # independently editable DEG/s soft limit
+```
+
+**The yaw limits belong to these exact same per-loss sections**, not a
+single constant across all fault cases. Any intermediate loss gets
+piecewise-linear interpolation. E.g. if the 30% and 40% speed limits are
+80 and 120 deg/s, respectively, 37% uses 108 deg/s.
+The gain interpolation is componentwise, e.g. `kp[0]` at 37% is
+`0.3 * kp_30[0] + 0.7 * kp_40[0]`.
+
+The default experiment config uses `[gain_schedule] mode="oracle"` for
+repeatable **controller tuning** against a known injection. Later use
+`mode="automatic"` to evaluate FDI-driven scheduling. This is a
+different setting from `-Oracle` which uses ground truth to engage
+the opposite-pair mechanism for simulation-only diagnosis.
+
+The `[yaw_rate_schedule]` section tunes anticipatory rotor-torque braking:
+`brake_start_fraction`, `rate_gain_nm_per_rps`,
+`max_corrective_moment_nm`, and `hard_abort_multiplier`.
+Soft speed ceilings do **not guarantee** rate below the limit if motors
+saturate or there is insufficient yaw torque authority. The allocator
+preserves requested total thrust/Roll/Pitch where feasible before using
+its remaining nullspace to regulate body yaw speed. The hard-abort envelope
+ends synthetic mirroring if rate becomes much larger than its scheduled cap.
+Neither mechanism artificially edits the simulated angular velocity.
+
+**IMPORTANT:** The current Pixhawk6C **experimental firmware** does not yet
+carry individually programmable AP_Param gains at 10/20/30/40%; the full
+per-10% independent tuning interface in this branch applies to the
+**MuJoCo configuration**. Do not apply these parameters to the real aircraft
+until the firmware parameter interface and physical controller are separately
+implemented and validated.
+
 ## Run the new experiment on Windows
 
 From a checked-out copy of `feature/mujoco-opposite-pair-20261008`:
