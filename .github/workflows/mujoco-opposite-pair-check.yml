@@ -59,3 +59,28 @@ jobs:
           name: mode29-opposite-pair-headless-csv
           path: logs/mode29_opposite_pair_*.csv
           if-no-files-found: warn
+
+  extreme_fault:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install simulation dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Fail on severe-fault position divergence or early termination
+        run: |
+          set -o pipefail
+          python mode29_mujoco.py --config config_opposite_pair.toml --headless --no-realtime --duration 36 --loss-percent 90 | tee logs/severe_90_console.txt
+          python tools/check_physical_safety.py logs/mode29_opposite_pair.csv --duration 36 --max-error 0.5
+      - name: Preserve severe-fault evidence even on test failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: severe-fault-bounded-allocator-csv
+          path: |
+            logs/mode29_opposite_pair.csv
+            logs/severe_90_console.txt
+          if-no-files-found: warn
