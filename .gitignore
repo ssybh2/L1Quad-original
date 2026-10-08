@@ -1,0 +1,8 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Simulation outputs are regenerated at runtime and can be very large.
+logs/
+
