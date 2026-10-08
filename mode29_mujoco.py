@@ -1547,12 +1547,15 @@ def run(cfg):
         "pair_opposite_motor","pair_loss_estimate_pct","pair_static_margin",
         "pair_estimate_bias_pp","pair_xy_error_m","pair_z_error_m",
         "pair_disengaged_time_s","pair_guard_reason",
+        "pair_retry_pending","pair_transient_reason","pair_severity_ready",
         "pair_yaw_cap_deg_s","pair_yaw_target_deg_s","pair_yaw_hard_abort_rps",
         "pair_yaw_brake_cmd_nm","pair_yaw_allocated_nm",
         "pair_yaw_min_nm","pair_yaw_max_nm","pair_yaw_saturated",
         "fdi_state","fdi_motor","fdi_candidate","fdi_confirm_count","fdi_recovery_count",
         "fdi_loss_estimate_pct","fdi_residual_ratio","fdi_sigma_mx","fdi_sigma_my","fdi_sigma_mz",
+        "fdi_loss_instant_pct","fdi_loss_rate_pp_s","fdi_cooldown_remaining_s",
         "schedule_mode","schedule_raw_loss_pct","schedule_loss_pct","schedule_confidence",
+        "allocator_effectiveness_loss_pct","schedule_allocator_mismatch_pp",
         "active_kpx","active_kpy","active_kpz","active_kvx","active_kvy","active_kvz",
         "active_krx","active_kry","active_krz","active_kox","active_koy","active_koz",
         "active_max_tilt_deg"
@@ -1907,6 +1910,9 @@ def run(cfg):
                         pair.disengaged_at_s if pair.disengaged_at_s is not None else ""
                     ),
                     "pair_guard_reason":pair.reason,
+                    "pair_retry_pending":int(pair.retry_pending),
+                    "pair_transient_reason":pair.transient_reason,
+                    "pair_severity_ready":int(pair.active),
                     "pair_yaw_cap_deg_s":(
                         yaw_envelope.limit_deg_s(pair.estimated_loss_percent)
                         if pair.active and yaw_envelope.enabled else 0.0
@@ -1934,10 +1940,23 @@ def run(cfg):
                     "fdi_sigma_mx":detector.sigma_observed[0],
                     "fdi_sigma_my":detector.sigma_observed[1],
                     "fdi_sigma_mz":detector.sigma_observed[2],
+                    "fdi_loss_instant_pct":detector.loss_instant_percent,
+                    "fdi_loss_rate_pp_s":detector.loss_rate_pp_s,
+                    "fdi_cooldown_remaining_s":max(0., detector.cooldown_until_s-data.time),
                     "schedule_mode":scheduler.mode,
                     "schedule_raw_loss_pct":scheduler.raw_loss,
                     "schedule_loss_pct":scheduler.scheduled_loss,
                     "schedule_confidence":scheduler.confidence,
+                    "allocator_effectiveness_loss_pct":(
+                        pair.estimated_loss_percent if pair.active
+                        else protection_loss if protection_active else 0.0
+                    ),
+                    "schedule_allocator_mismatch_pp":(
+                        scheduler.scheduled_loss - (
+                            pair.estimated_loss_percent if pair.active
+                            else protection_loss if protection_active else 0.0
+                        )
+                    ),
                     "active_kpx":active_tuning["kp"][0],"active_kpy":active_tuning["kp"][1],"active_kpz":active_tuning["kp"][2],
                     "active_kvx":active_tuning["kv"][0],"active_kvy":active_tuning["kv"][1],"active_kvz":active_tuning["kv"][2],
                     "active_krx":active_tuning["kr"][0],"active_kry":active_tuning["kr"][1],"active_krz":active_tuning["kr"][2],
