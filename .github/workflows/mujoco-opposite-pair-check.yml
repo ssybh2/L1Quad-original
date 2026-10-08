@@ -21,12 +21,21 @@ jobs:
         run: python -m py_compile mode29_mujoco.py opposite_pair_sim.py tests/test_opposite_pair.py
       - name: Check opposite pair allocation and fault guards
         run: python -m unittest discover -s tests -p 'test_*.py' -v
-      - name: Headless paired fault smoke simulation
-        run: python mode29_mujoco.py --config config_opposite_pair.toml --headless --no-realtime --duration 24
+      - name: Blind-FDI headless simulation (may refuse to engage)
+        run: |
+          python mode29_mujoco.py --config config_opposite_pair.toml --headless --no-realtime --duration 24
+          cp logs/mode29_opposite_pair.csv logs/mode29_opposite_pair_blind.csv
+      - name: Oracle headless control-allocation comparison (SIM ONLY)
+        run: |
+          python mode29_mujoco.py --config config_opposite_pair.toml --headless --no-realtime --duration 24 --pair-oracle
+          cp logs/mode29_opposite_pair.csv logs/mode29_opposite_pair_oracle.csv
+      - name: Assert that oracle case actually exercises pair mode
+        run: |
+          python -c "import csv; rows=list(csv.DictReader(open('logs/mode29_opposite_pair_oracle.csv'))); active=sum(int(x['pair_active']) for x in rows); print('pair_active samples:',active); assert active>0, 'oracle pair mode never engaged'"
       - name: Upload simulation log for diagnosis
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: mode29-opposite-pair-headless-csv
-          path: logs/mode29_opposite_pair.csv
+          path: logs/mode29_opposite_pair_*.csv
           if-no-files-found: warn
