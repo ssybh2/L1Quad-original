@@ -26,7 +26,7 @@ If motor M1 (or M3) loses an inferred fraction of thrust, apply the **same fract
 ### Guard thresholds (source constants; not proof of safety)
 
 - `M29_PAIR_EN`: 0 by default, 1 only in explicit experiment
-- Allowed both injected and estimated loss at engagement: 60–70% (FDI's existing confirmation threshold is 60%)
+- Allowed both injected and estimated loss at engagement: 60–70% (FDI's existing confirmation threshold is 60%). Additionally, absolute FDI-versus-injected loss bias must be <=8 percentage points; injected truth is consulted only as a safety gate, never as the estimate.
 - Conservative static model margin: >=1.5, using measured-range thrust at nominal `w=80` (1800us) and max configured tilt
 - Abort mirror if `abs(body_yaw_rate) > 4.0 rad/s`, horizontal position error >0.50m, or altitude error >0.40m, or AHRS position/rate is invalid
 - Mode29 is constrained to its original takeoff+settle hover-gating conditions
