@@ -834,6 +834,137 @@ void ModeAdaptive::update_motor_pair_mode(bool motor_degradation_active)
                   (double)motor_pair_loss_pct);
 }
 
+void ModeAdaptive::update_bounded_pair_mode(bool injected_active,
+                                            const VectorN<float, 4> &cmd,
+                                            float dt)
+{
+#if REAL_OR_SITL
+    if (!motor_bounded_enabled_this_run || !motor_pair_enabled_this_run) {
+        return;
+    }
+    // Bench/HIL controlled injection only. Never autonomously damage a
+    // second rotor for an uncommanded real failure.
+    constexpr float ramp_pp_s=70.0f;
+    constexpr float rollback_pp_s=140.0f;
+    constexpr uint32_t hold_ms=150U;
+    constexpr uint32_t retry_ms=300U;
+    const uint32_t now=AP_HAL::millis();
+    const float step=constrain_float(dt,0.0f,0.01f);
+    const auto withdraw=[&](bool urgent) {
+        motor_pair_loss_pct=MAX(0.0f,motor_pair_loss_pct-
+            (urgent ? rollback_pp_s : ramp_pp_s)*step);
+        motor_pair_active=motor_pair_loss_pct>0.001f;
+        motor_pair_feasible_since_ms=0U;
+    };
+    if (!injected_active) {
+        // Smoothly remove the synthetic mirror, while the injected primary
+        // loss is separately released through its controlled HIL ramp.
+        withdraw(false);
+        motor_pair_retry_pending=false;
+        motor_pair_target_loss_pct=0.0f;
+        if (!motor_pair_active) {
+            motor_pair_fault_id=0U;
+            motor_pair_opposite_id=0U;
+        }
+        return;
+    }
+
+    Vector3f pos;
+    const bool nav_valid=ahrs.get_relative_position_NED_origin(pos) &&
+                         mode29_finite(pos);
+    const Vector3f omega=AP::ahrs().get_gyro();
+    const bool attitude_valid=mode29_finite(omega);
+    const float xy=nav_valid?sqrtf(pos.x*pos.x+pos.y*pos.y):1.0e6f;
+    const float z=nav_valid?fabsf(pos.z+takeoffAlt):1.0e6f;
+
+    if (!nav_valid || !attitude_valid ||
+        xy>MOTOR_PAIR_MAX_XY_ERROR_M || z>MOTOR_PAIR_MAX_Z_ERROR_M ||
+        !motors->armed() || g.LandFlag || trajIndex!=0) {
+        withdraw(true);
+        return;
+    }
+    // Wrong motor ID is a hard supervision fault, unlike transient wrench
+    // infeasibility or temporary FDI severity discrepancy.
+    if (motor_fault_confirmed && motor_fault_detected_id!=motor_degradation_motor_id) {
+        motor_pair_inhibited=true;
+    }
+    if (motor_pair_inhibited || !motor_fault_confirmed ||
+        motor_fault_detected_id<1 || motor_fault_detected_id>4 ||
+        !isfinite(motor_fault_loss_estimate_pct) ||
+        fabsf(motor_fault_loss_estimate_pct-motor_degradation_loss_pct)>
+            MOTOR_PAIR_MAX_ESTIMATE_BIAS_PCT) {
+        withdraw(false);
+        return;
+    }
+    const uint8_t failed=motor_fault_detected_id-1U;
+    const uint8_t opposite=failed^1U;
+    const float target=constrain_float(motor_fault_loss_estimate_pct,0.0f,100.0f);
+    motor_pair_target_loss_pct=target;
+    motor_pair_fault_id=failed+1U;
+    motor_pair_opposite_id=opposite+1U;
+
+    const auto authority=[&](float synthetic_loss,float &yaw_lo,
+                              float &yaw_hi)->bool {
+        float eta[4]={1.0f,1.0f,1.0f,1.0f};
+        eta[failed]=1.0f-0.01f*target;
+        eta[opposite]=1.0f-0.01f*synthetic_loss;
+        return mode29_primary_yaw_interval(cmd,eta,yaw_lo,yaw_hi);
+    };
+    float baseline_min=0.0f,baseline_max=0.0f;
+    float target_min=0.0f,target_max=0.0f;
+    const bool original_feasible=authority(0.0f,baseline_min,baseline_max);
+    const bool target_feasible=authority(target,target_min,target_max);
+    // The mirrored-loss choice must NOT sacrifice yaw braking torque at
+    // high spin, nor the requested three-axis primary wrench.
+    const auto worsens_braking=[&](float test_min,float test_max) -> bool {
+        if (fabsf(omega.z)<0.50f || !original_feasible) {
+            return false;
+        }
+        return (omega.z<0.0f && test_max < baseline_max-0.002f) ||
+               (omega.z>0.0f && test_min > baseline_min+0.002f);
+    };
+    const bool acceptable=target_feasible &&
+                           !worsens_braking(target_min,target_max);
+    if (!acceptable) {
+        // Temporary physical infeasibility. Never permanently inhibit.
+        motor_pair_feasible_since_ms=0U;
+        if (!motor_pair_retry_pending) {
+            motor_pair_retry_count++;
+            motor_pair_retry_after_ms=now+retry_ms;
+            motor_pair_retry_pending=true;
+        }
+        withdraw(true);
+        return;
+    }
+    if (motor_pair_retry_pending) {
+        if ((int32_t)(now-motor_pair_retry_after_ms)<0) {
+            withdraw(false);
+            return;
+        }
+        motor_pair_retry_pending=false;
+    }
+    if (motor_pair_feasible_since_ms==0U) {
+        motor_pair_feasible_since_ms=now;
+    }
+    if (now-motor_pair_feasible_since_ms<hold_ms) {
+        withdraw(false);
+        return;
+    }
+
+    const float proposed=MIN(target,motor_pair_loss_pct+ramp_pp_s*step);
+    float proposed_min,proposed_max;
+    if (!authority(proposed,proposed_min,proposed_max) ||
+        worsens_braking(proposed_min,proposed_max)) {
+        withdraw(true);
+        return;
+    }
+    motor_pair_loss_pct=proposed;
+    motor_pair_active=motor_pair_loss_pct>0.001f;
+#else
+    (void)injected_active; (void)cmd; (void)dt;
+#endif
+}
+
 void ModeAdaptive::reset_gain_schedule()
 {
     gain_schedule_loss_raw_pct = 0.0f;
