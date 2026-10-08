@@ -6,6 +6,7 @@ on:
       - softdrone
       - feature/mode29-fdi-recovery
       - feature/mode29-position-gain-schedule
+      - feature/mode29-pixhawk-next-from-20261006
   workflow_dispatch:
 
 jobs:
@@ -18,6 +19,9 @@ jobs:
         with:
           submodules: recursive
           fetch-depth: 1
+
+      - name: Check opposite-pair geometry and actuator rank (offline model only)
+        run: python3 tools/test_mode29_pair_math.py
 
       - name: Install ArduPilot prerequisites and L1Quad customization
         shell: bash
@@ -41,7 +45,7 @@ jobs:
       - name: Upload flashable firmware
         uses: actions/upload-artifact@v4
         with:
-          name: mode29-position-gain-schedule-pixhawk6c-firmware
+          name: mode29-opposite-pair-experimental-pixhawk6c-firmware
           path: |
             ardupilot/build/Pixhawk6C/bin/arducopter.apj
             ardupilot/build/Pixhawk6C/bin/arducopter.bin
