@@ -181,6 +181,8 @@ bool ModeAdaptive::init(bool ignore_checks)
     landingTriggered = 0;
     clear_motor_degradation_command();
     clear_auto_motor_fault();
+    reset_motor_pair_mode();
+    motor_pair_enabled_this_run = ((int8_t)g.m29_pair_en == 1);
 
     if (!ahrs.have_inertial_nav()) {
         GCS_SEND_TEXT(MAV_SEVERITY_CRITICAL,
@@ -322,6 +324,7 @@ void ModeAdaptive::exit()
     // Leaving Mode 29 immediately clears both injected and detected faults.
     clear_motor_degradation_command();
     clear_auto_motor_fault();
+    reset_motor_pair_mode();
     reset_gain_schedule();
 }
 
@@ -602,6 +605,13 @@ void ModeAdaptive::update_auto_motor_fault_detector(float time_in_this_run)
     motor_fault_sigma_filtered =
         motor_fault_sigma_filtered +
         (sigma_now - motor_fault_sigma_filtered) * sigma_alpha;
+
+    // Opposite-pair disturbances are not observable with the single-fault
+    // model below. Hold the previously confirmed isolated motor and loss
+    // while intentional mirror derating is enabled.
+    if (motor_pair_active) {
+        return;
+    }
 
     const bool detector_gate =
         motors->armed() &&
@@ -902,6 +912,7 @@ void ModeAdaptive::run()
     if (!motors->armed()) {
         clear_motor_degradation_command();
         clear_auto_motor_fault();
+        reset_motor_pair_mode();
         reset_gain_schedule();
         return;
     }
@@ -909,6 +920,7 @@ void ModeAdaptive::run()
     const auto abort_mode29 = [this](const char *reason) {
         GCS_SEND_TEXT(MAV_SEVERITY_CRITICAL, "Mode29 abort: %s", reason);
         clear_motor_degradation_command();
+        reset_motor_pair_mode();
         motorEnable = 0;
 
         // Preserve ARM state and hand control back to the normal ArduCopter
@@ -1161,6 +1173,7 @@ void ModeAdaptive::run()
     // nominal actuator commands. A confirmed severe fault automatically
     // releases yaw even when the injector itself requested keep-yaw.
     update_auto_motor_fault_detector(timeInThisRun);
+    update_motor_pair_mode(motor_degradation_active);
     update_gain_schedule(motor_degradation_active);
 
     AP::logger().Write("L1GS",
@@ -1283,7 +1296,8 @@ void ModeAdaptive::run()
             motorMixingYawFreeEffectivenessAware(
                 thrustMomentCmd + L1thrustMomentCmd,
                 motor_fault_detected_id,
-                motor_fault_loss_estimate_pct);
+                motor_fault_loss_estimate_pct,
+                motor_pair_active ? motor_pair_opposite_id : 0U);
     } else if (yaw_free_active) {
         motorPWMCommanded =
             motorMixingYawFree(thrustMomentCmd + L1thrustMomentCmd);
