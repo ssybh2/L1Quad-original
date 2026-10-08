@@ -9,7 +9,7 @@ from pathlib import Path
 class RecoveryCooldownTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.cfg = tomllib.loads(Path("config_opposite_pair.toml").read_text())
+        cls.cfg = tomllib.loads(Path(__file__).resolve().parents[1].joinpath("config_opposite_pair.toml").read_text(encoding="utf-8"))
 
     def new_detector(self):
         return BlindMotorFaultDetector(
