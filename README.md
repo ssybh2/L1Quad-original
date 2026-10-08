@@ -1,3 +1,78 @@
+# Mode29 MuJoCo: observer-gated opposite-motor spin / hover experiment
+
+**This branch builds on your uploaded MuJoCo simulation without changing the upload branch.**
+Firmware research reference: `feature/mode29-pixhawk-next-from-20261006`
+(base Oct 6 commit `2c606d7e`). This is a **simulation prototype**, not a
+verified flight-control solution.
+
+## Run the new experiment on Windows
+
+From a checked-out copy of `feature/mujoco-opposite-pair-20261008`:
+
+```powershell
+python -m pip install -r requirements.txt
+.\run.ps1 -Pair -LossPercent 60
+```
+
+Fast headless experiment:
+
+```powershell
+.\run.ps1 -Pair -LossPercent 60 -Headless -NoRealtime
+```
+
+To compare against your original single-motor recovery behavior, omit `-Pair`:
+
+```powershell
+.\run.ps1 -LossPercent 60
+```
+
+These run **different configs and different log CSV files**:
+- `config.toml` defaults to `[opposite_pair] enabled=false` (your old behavior);
+- `config_opposite_pair.toml` explicitly enables observer-gated pairing, retains
+  10/6 60% gain anchor, uses the firmware's 60% FDI confirmation threshold,
+  releases yaw without null-space damping, and disables artificial yaw-rate clipping.
+
+The experiment still runs the position loop against NED `(0,0,-1)` after
+the normal takeoff and settle interval. The FDI first identifies the motor
+and estimates its loss from measured motion, without reading injector truth.
+It then reduces the opposite motor's thrust effectiveness by the **estimated**
+percentage and allocates `F,Mx,My` using a dual-effectiveness matrix.
+
+Motor map: `M1 <-> M2`, `M3 <-> M4`. Original injected loss is applied to
+the selected motor; a separate synthetic derating is applied to the opposite motor.
+Both are applied in **thrust space** after motor lag, not as a PWM fraction.
+
+Important research limitations:
+- Only engages after confirmed single-motor FDI, at estimated/injected
+  loss <=70% and within an 8 percentage-point agreement gate;
+- Checks position error, yaw rate and a conservative static thrust margin;
+- Freezes the single-fault estimate during the paired impairment (a
+  single-fault signature is invalid once the second motor is derated);
+- Does **not** guarantee hover or safe yaw under arbitrary fault severity.
+  On a guard failure it disables artificial mirroring and records the reason,
+  but the underlying injected failure can remain active.
+- No Oct 7 Yaw-damping firmware parameters were copied into this design.
+  Existing original simulation damping remains available only in baseline mode.
+
+Diagnostic log: `logs/mode29_opposite_pair.csv`. New columns include
+`pair_active`, `pair_inhibited`, `pair_failed_motor`,
+`pair_opposite_motor`, `pair_loss_estimate_pct`,
+`pair_static_margin`, `pair_estimate_bias_pp`,
+`pair_xy_error_m`, and `pair_z_error_m`. Compare to the original
+`fault_loss_pct`, `fdi_loss_estimate_pct`, `yaw_rate_rps`,
+`allocator_mode`, `x,y,z`, `roll_deg`, and `pitch_deg`.
+
+Validation:
+
+```powershell
+python -m unittest discover -s tests -p "test_*.py" -v
+```
+
+GitHub Actions runs syntax checks, mathematical unit tests and one
+headless smoke simulation. That does not certify closed-loop stability.
+
+---
+
 # Softdrone Mode29 MuJoCo v2 — disturbance tuning build
 
 This version keeps the Mode29 geometric-controller / 6S motor-model baseline
