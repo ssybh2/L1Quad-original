@@ -88,6 +88,11 @@ class OppositePairExperiment:
         self.max_bias = float(cfg.get("max_estimate_bias_percent", 8.0))
         self.severity_settle_s = float(cfg.get("severity_settle_time_s", 0.12))
         self.severity_step_tolerance_pp = float(cfg.get("severity_step_tolerance_pp", 1.0))
+        # Dynamic (transient) infeasibility must never permanently lock the pair.
+        self.retry_delay_s = float(cfg.get("retry_delay_s", 0.30))
+        self.full_wrench_hold_s = float(cfg.get("feasible_hold_s", 0.15))
+        self.mirror_ramp_rate_pp_s = float(cfg.get("mirror_ramp_rate_pp_s", 70.0))
+        self.minimum_primary_reserve_n = float(cfg.get("minimum_primary_reserve_n", 0.0))
         self.L = float(vehicle["L_m"]) if "L_m" in vehicle else 0.28
         self.D = float(vehicle["D_m"]) if "D_m" in vehicle else 0.28
         self.min_margin = float(cfg.get("min_static_thrust_margin", 1.5))
@@ -96,7 +101,10 @@ class OppositePairExperiment:
         self.max_z = float(cfg.get("max_z_error_m", 0.4))
         if self.enabled and (not (0 < self.min_condition <= 1) or
                              min(self.max_spin, self.max_xy, self.max_z, self.min_margin) <= 0
-                             or self.severity_settle_s < 0 or self.severity_step_tolerance_pp <= 0):
+                             or self.severity_settle_s < 0 or self.severity_step_tolerance_pp <= 0
+                             or self.retry_delay_s < 0 or self.full_wrench_hold_s < 0
+                             or self.mirror_ramp_rate_pp_s <= 0
+                             or self.minimum_primary_reserve_n < 0):
             raise ValueError("invalid opposite_pair safety configuration")
         self.active = False
         self.inhibited = False
@@ -112,6 +120,96 @@ class OppositePairExperiment:
         self.severity_prev_pct = None
         self.retry_pending = False
         self.transient_reason = ""
+        self.retry_at_s = 0.0
+        self.retry_count = 0
+        self.mirror_loss_percent = 0.0
+        self.feasible_since_s = None
+        self.feasible_stable = False
+        self.mirror_rollback_count = 0
+        self.primary_interval_width_n = 0.0
+        self.position_priority_scale = 1.0
+
+    def defer(self, t, reason):
+        """Temporary fallback; preserve the blind single-fault FDI estimate."""
+        self.active = False
+        self.inhibited = False
+        self.retry_pending = True
+        self.retry_count += 1
+        self.retry_at_s = float(t) + self.retry_delay_s
+        self.disengaged_at_s = float(t)
+        self.reason = reason
+        self.transient_reason = reason
+        self.mirror_loss_percent = 0.0
+        self.feasible_since_s = None
+        self.feasible_stable = False
+        self.primary_interval_width_n = 0.0
+
+    def plan_mirror(self, t, dt, cmd, mixer):
+        """Continuously test full-wrench viability, then ramp the synthetic loss.
+
+        F/Mx/My feasibility ALWAYS precedes yaw; the motor physics is checked
+        at the actual asymmetric *current* loss and the next proposed value.
+        """
+        from yaw_rate_schedule import paired_primary_feasibility
+        if not self.active:
+            return False
+        target = self.estimated_loss_percent
+        check = lambda pct: paired_primary_feasibility(
+            mixer, cmd, self.failed_motor_id, target, pct,
+            self.minimum_primary_reserve_n
+        )
+        present = check(self.mirror_loss_percent)
+        if not present["feasible"]:
+            # Restore as much control authority as possible immediately.
+            zero = check(0.0)
+            if not zero["feasible"]:
+                self.defer(t, "even single-fault primary wrench currently infeasible")
+                return False
+            low, high = 0.0, self.mirror_loss_percent
+            for _ in range(13):
+                mid = 0.5*(low+high)
+                if check(mid)["feasible"]:
+                    low = mid
+                else:
+                    high = mid
+            self.mirror_loss_percent = low
+            self.mirror_rollback_count += 1
+            self.feasible_since_s = None
+            self.feasible_stable = False
+            present = check(low)
+
+        full = check(target)
+        if full["feasible"]:
+            if self.feasible_since_s is None:
+                self.feasible_since_s = float(t)
+            self.feasible_stable = (
+                float(t) - self.feasible_since_s >= self.full_wrench_hold_s
+            )
+        else:
+            self.feasible_since_s = None
+            self.feasible_stable = False
+        if self.feasible_stable:
+            proposed = min(target, self.mirror_loss_percent +
+                           max(0., dt)*self.mirror_ramp_rate_pp_s)
+            if not check(proposed)["feasible"]:
+                low, high = self.mirror_loss_percent, proposed
+                for _ in range(12):
+                    mid = 0.5*(low+high)
+                    if check(mid)["feasible"]:
+                        low = mid
+                    else:
+                        high = mid
+                proposed = low
+            self.mirror_loss_percent = proposed
+        self.primary_interval_width_n = float(present["interval_width_n"])
+        self.transient_reason = "" if self.feasible_stable else (
+            "waiting for continuously feasible F/Mx/My primary wrench"
+        )
+        # Slow down yaw when position error consumes the control margin.
+        self.position_priority_scale = float(np.clip(
+            1.0 - self._last_xy_error / max(self.max_xy, 1e-6), 0.0, 1.0
+        )) if hasattr(self, "_last_xy_error") else 1.0
+        return True
 
     def update(self, t, measured_pos, measured_omega, target_altitude,
                original_fault_active, injector, detector, yaw_envelope=None):
@@ -123,6 +221,7 @@ class OppositePairExperiment:
         xy_error = float(np.linalg.norm(pos[:2])) if finite else float("inf")
         z_error = abs(float(pos[2]) + float(target_altitude)) if finite else float("inf")
         yaw_rate = abs(float(omega[2])) if finite else float("inf")
+        self._last_xy_error = xy_error
         # Physical yaw-rate ceiling is loss-dependent in paired experiments.
         # No simulator gyro clipping. A separate harder abort handles lack
         # of torque authority or excessive transients.
@@ -137,24 +236,21 @@ class OppositePairExperiment:
                  yaw_rate > yaw_abort)
 
         if self.active:
-            if guard or not original_fault_active or (self.source == "fdi" and not detector.confirmed):
+            if not original_fault_active:
                 self.active = False
-                self.inhibited = True
+                self.inhibited = True   # experiment completed, not a dynamic fault
+                self.mirror_loss_percent = 0.0
                 self.disengaged_at_s = float(t)
-                if not original_fault_active:
-                    self.reason = "injected fault ended"
-                elif self.source == "fdi" and not detector.confirmed:
-                    self.reason = "FDI confirmation lost"
-                elif not finite:
-                    self.reason = "non-finite position or angular rate"
-                elif xy_error > self.max_xy:
-                    self.reason = f"XY error {xy_error:.3f} m > {self.max_xy:.3f} m"
-                elif z_error > self.max_z:
-                    self.reason = f"height error {z_error:.3f} m > {self.max_z:.3f} m"
-                elif yaw_rate > yaw_abort:
-                    self.reason = f"yaw rate {yaw_rate:.3f} rad/s > hard abort {yaw_abort:.3f} rad/s"
-                else:
-                    self.reason = "unknown paired-fault disengagement"
+                self.reason = "injected fault ended"
+            elif self.source == "fdi" and not detector.confirmed:
+                self.defer(t, "FDI confirmation temporarily lost")
+            elif not finite:
+                self.active = False
+                self.inhibited = True  # invalid localization/gyro is a hard safety lock
+                self.mirror_loss_percent = 0.0
+                self.reason = "non-finite position or angular rate"
+            elif guard:
+                self.defer(t, "temporary position/yaw-rate safety excursion")
             return
         if not original_fault_active:
             self.severity_stable_since_s = None
@@ -162,9 +258,13 @@ class OppositePairExperiment:
             self.retry_pending = False
             self.transient_reason = ""
             return
-        if self.inhibited:
+        if self.inhibited or float(t) < self.retry_at_s:
             return
-        if guard:
+        # Hysteresis after a temporary exit: do not chatter against the guard.
+        if guard or (self.retry_count and
+                     (xy_error > .75*self.max_xy or
+                      z_error > .75*self.max_z or
+                      yaw_rate > .75*yaw_abort)):
             return
         if self.source == "oracle":
             # Simulation-only independent check of allocation physics:
@@ -249,6 +349,11 @@ class OppositePairExperiment:
             self.reason = "insufficient estimated thrust margin"
             return
         self.active = True
+        self.retry_pending = False
+        self.transient_reason = ""
+        self.feasible_since_s = None
+        self.feasible_stable = False
+        self.mirror_loss_percent = 0.0
         self.failed_motor_id = estimated_motor_id
         self.opposite_motor_id = opposite_motor(self.failed_motor_id)
         self.estimated_loss_percent = loss
