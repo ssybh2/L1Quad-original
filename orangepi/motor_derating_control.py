@@ -160,7 +160,7 @@ def main():
     print(f"connected: sysid={target_system} compid={target_component}")
 
     if args.command == "status":
-        for name in ("SYSID_MYGCS", "RC_OVERRIDE_TIME", "FLTMODE_CH", "RC9_OPTION", "RC10_OPTION", "RC11_OPTION", "RC12_OPTION", "TRAJINDEX", "LANDFLAG", "L1ENABLE", "M29_TKOFF_ALT", "M29_TKOFF_T", "M29_SETTLE_T"):
+        for name in ("SYSID_MYGCS", "RC_OVERRIDE_TIME", "FLTMODE_CH", "RC9_OPTION", "RC10_OPTION", "RC11_OPTION", "RC12_OPTION", "TRAJINDEX", "LANDFLAG", "L1ENABLE", "M29_TKOFF_ALT", "M29_TKOFF_T", "M29_SETTLE_T", "M29_GS_MODE", "M29_PAIR_EN"):
             value = request_param(m, target_system, target_component, name)
             print(f"{name}={value}")
         return 0
