@@ -36,6 +36,13 @@ jobs:
         run: |
           python analyze_pair_log.py logs/mode29_opposite_pair_blind.csv
           python analyze_pair_log.py logs/mode29_opposite_pair_oracle.csv
+      - name: Input coverage for arbitrary loss fractions (not flight validation)
+        run: |
+          for loss in 0 23.7 81.3 100; do
+            echo "Testing injected motor loss: ${loss}%"
+            python mode29_mujoco.py --config config_opposite_pair.toml --pair-oracle --headless --no-realtime --duration 16.2 --loss-percent "$loss"
+            cp logs/mode29_opposite_pair.csv "logs/mode29_opposite_pair_loss_${loss}.csv"
+          done
       - name: Upload simulation log for diagnosis
         if: always()
         uses: actions/upload-artifact@v4
