@@ -229,45 +229,18 @@ class Mixer:
         return np.linalg.solve(A, b)
 
     def allocate(self, cmd):
-        Fcmd, Mx, My, Mz = [float(x) for x in cmd]
-
-        w0 = self.motor.w_from_thrust(max(0.0, 0.25*Fcmd))
-        dF = self.motor.thrust_slope(w0)
-        dM = self.motor.moment_slope(w0)
-        offsetF = self.motor.thrust(w0) - dF*w0
-        thrust_biased = Fcmd - 4.0*offsetF
-
-        w = np.array([
-            thrust_biased/(4*dF) - Mx/(2*self.L*dF) + My/(2*self.D*dF) + Mz/(4*dM),
-            thrust_biased/(4*dF) + Mx/(2*self.L*dF) - My/(2*self.D*dF) + Mz/(4*dM),
-            thrust_biased/(4*dF) + Mx/(2*self.L*dF) + My/(2*self.D*dF) - Mz/(4*dM),
-            thrust_biased/(4*dF) - Mx/(2*self.L*dF) - My/(2*self.D*dF) - Mz/(4*dM),
-        ])
-
-        w = self._refine(w, cmd)
-        w = self._refine(w, cmd)
-
-        if not np.isfinite(w).all():
-            raise RuntimeError("non-finite motor allocation")
-
-        return np.clip(w, 0.0, 100.0)
+        """Healthy/recovered mode uses bounded physical allocation as well."""
+        w, diag = bounded_allocate(self, cmd, 1, 0.0)
+        self.last_effectiveness_diag = diag
+        return w
 
     def allocate_yaw_free(self, cmd):
-        """Minimum-norm allocation for collective thrust, roll and pitch."""
-        Fcmd, Mx, My = [float(x) for x in cmd[:3]]
-        motor_thrust = np.array([
-            0.25*Fcmd - Mx/(2.0*self.L) + My/(2.0*self.D),
-            0.25*Fcmd + Mx/(2.0*self.L) - My/(2.0*self.D),
-            0.25*Fcmd + Mx/(2.0*self.L) + My/(2.0*self.D),
-            0.25*Fcmd - Mx/(2.0*self.L) - My/(2.0*self.D),
-        ], dtype=float)
-        w = np.array(
-            [self.motor.w_from_thrust(max(0.0, fi)) for fi in motor_thrust],
-            dtype=float,
-        )
-        if not np.isfinite(w).all():
-            raise RuntimeError("non-finite yaw-free motor allocation")
-        return np.clip(w, 0.0, 100.0)
+        """Bounded collective & attitude with no requested heading moment."""
+        desired = np.array([float(cmd[0]), float(cmd[1]),
+                            float(cmd[2]), 0.0], dtype=float)
+        w, diag = bounded_allocate(self, desired, 1, 0.0)
+        self.last_effectiveness_diag = diag
+        return w
 
     def allocate_effectiveness_aware(self, cmd, degraded_motor_id, loss_percent):
         """Bounded allocation with exact physical thrust limits.
