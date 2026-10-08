@@ -50,6 +50,11 @@ def check(csv_path, duration, max_error):
             assert math.isfinite(instant) and abs(instant) <= 100.001, (
                 "FDI trusted instantaneous estimate exceeded physical bounds"
             )
+            raw = float(r.get("fdi_loss_unclipped_instant_pct", "nan"))
+            assert math.isfinite(raw) and abs(raw) <= 1000.0, (
+                f"FDI RAW INNOVATION ANOMALY: {raw:g}% at t={r['t']}s; "
+                "anomaly must not be hidden by display clipping"
+            )
     assert not bad, (
         f"POSITION SAFETY FAIL: {len(bad)} samples >{max_error:.3f}m "
         f"(first t={bad[0]:.3f}s, peak={maximum[1]:.3f}m at {maximum[0]:.3f}s)"
