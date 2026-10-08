@@ -1954,6 +1954,9 @@ public:
 
     // Experimental opposite-pair effectiveness matching: hard-coded containment.
     // Kept independent of 2026-10-07 yaw-damping/reduced-attitude changes.
+    // At 100% paired loss only two live actuators remain: F/Roll/Pitch
+    // become rank deficient, so do not permit nearly complete paired failures.
+    static constexpr float MOTOR_PAIR_MAX_LOSS_PCT = 70.0f;
     static constexpr float MOTOR_PAIR_MIN_STATIC_MARGIN = 1.5f;
     static constexpr float MOTOR_PAIR_MAX_SPIN_RAD_S = 4.0f;
     static constexpr float MOTOR_PAIR_MAX_XY_ERROR_M = 0.50f;
