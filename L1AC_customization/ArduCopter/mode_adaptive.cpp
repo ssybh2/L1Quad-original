@@ -698,6 +698,9 @@ void ModeAdaptive::clear_auto_motor_fault()
     motor_fault_nominal_prev_valid = false;
     motor_fdi_confirmed_at_ms = 0U;
     motor_fdi_guarded_cycles = 0U;
+    motor_fdi_saturation_streak_samples = 0U;
+    motor_fdi_last_excitation_w = 0.0f;
+    motor_fdi_last_excitation_valid = false;
     motor_fdi_raw_innovation_pct = 0.0f;
     motor_fdi_applied_delta_pct = 0.0f;
     motor_fdi_excitation_w = 0.0f;
@@ -1246,6 +1249,12 @@ void ModeAdaptive::update_auto_motor_fault_detector(float time_in_this_run)
         if (motor_bounded_enabled_this_run) {
             motor_fdi_gate_code = 9U; // synthetic paired loss, unobservable
             motor_fdi_guarded_cycles++;
+            // Paired mixer changes invalidate residual history. Force a fresh
+            // observer settle interval after the synthetic pair disengages.
+            motor_fdi_confirmed_at_ms = AP_HAL::millis();
+            motor_fdi_innovation_sign = 0;
+            motor_fdi_consistent_samples = 0;
+            motor_fdi_last_excitation_valid = false;
         }
         return;
     }
@@ -1258,6 +1267,10 @@ void ModeAdaptive::update_auto_motor_fault_detector(float time_in_this_run)
         motor_fault_sigma_baseline=motor_fault_sigma_filtered;
         motor_fdi_gate_code = 9U; // staged release/reanchor
         motor_fdi_guarded_cycles++;
+        motor_fdi_confirmed_at_ms = AP_HAL::millis();
+        motor_fdi_innovation_sign = 0;
+        motor_fdi_consistent_samples = 0;
+        motor_fdi_last_excitation_valid = false;
         return;
     }
 
@@ -1346,14 +1359,33 @@ void ModeAdaptive::update_auto_motor_fault_detector(float time_in_this_run)
     if (motor_fault_confirmed) {
         if (motor_bounded_enabled_this_run &&
             motor_bounded_primary_saturated) {
-            motor_fdi_gate_code=2U; // previous step primary saturation
-            // Last step could not achieve the requested F/Mx/My. The
-            // residual is then NOT an independent motor-loss measurement.
-            // Freeze severity, retain motor identity and do not falsely
-            // report recovery from a saturated control input.
+            // Requested F/Mx/My was not achieved; residual cannot reliably
+            // identify motor effectiveness. Do NOT force a 100% loss guess.
+            // The observer must settle AGAIN after saturation clears.
+            motor_fdi_confirmed_at_ms = AP_HAL::millis();
+            motor_fdi_innovation_sign = 0;
+            motor_fdi_consistent_samples = 0;
+            motor_fdi_last_excitation_valid = false;
+            if (motor_fdi_saturation_streak_samples < 60000U) {
+                motor_fdi_saturation_streak_samples++;
+            }
+            motor_fdi_gate_code =
+                motor_fdi_saturation_streak_samples >= 200U ? 11U : 2U;
+            if (motor_fdi_saturation_streak_samples == 200U ||
+                (motor_fdi_saturation_streak_samples > 200U &&
+                 motor_fdi_saturation_streak_samples % 400U == 0U)) {
+                GCS_SEND_TEXT(MAV_SEVERITY_WARNING,
+                              "Mode29 HIL FDI unobservable: allocation saturated, hold M%u %.0f%%",
+                              (unsigned)motor_fault_detected_id,
+                              (double)motor_fault_loss_estimate_pct);
+            }
             motor_fault_recovery_count = 0;
+            motor_fdi_guarded_cycles++;
             motor_bounded_fdi_freeze_samples++;
             return;
+        }
+        if (motor_bounded_enabled_this_run) {
+            motor_fdi_saturation_streak_samples = 0U;
         }
         if (motor_fault_detected_id < 1 || motor_fault_detected_id > 4) {
             clear_auto_motor_fault();
@@ -1365,6 +1397,19 @@ void ModeAdaptive::update_auto_motor_fault_detector(float time_in_this_run)
             constrain_float(motor_fault_nominal_prev[idx], 0.0f, 100.0f);
         if (motor_bounded_enabled_this_run) {
             motor_fdi_excitation_w=w;
+            // Command discontinuities invalidate a low-pass residual
+            // even when F/Mx/My is feasible. Re-settle after a >=12-point
+            // change on the detected motor (w has units 0..100).
+            constexpr float EXCITATION_STEP_W=12.0f;
+            if (motor_fdi_last_excitation_valid &&
+                fabsf(w-motor_fdi_last_excitation_w)>=EXCITATION_STEP_W) {
+                motor_fdi_confirmed_at_ms = AP_HAL::millis();
+                motor_fdi_innovation_sign = 0;
+                motor_fdi_consistent_samples = 0;
+                motor_fdi_gate_code = 12U;
+            }
+            motor_fdi_last_excitation_w = w;
+            motor_fdi_last_excitation_valid = true;
         }
         const Vector3f signature = motor_loss_signature(idx, w);
         const float signature_norm_sq = signature * signature;
@@ -1414,7 +1459,9 @@ void ModeAdaptive::update_auto_motor_fault_detector(float time_in_this_run)
             if (motor_fdi_confirmed_at_ms == 0U ||
                 AP_HAL::millis()-motor_fdi_confirmed_at_ms <
                     OBSERVER_SETTLE_MS) {
-                motor_fdi_gate_code=1U;
+                if (motor_fdi_gate_code != 12U) {
+                    motor_fdi_gate_code=1U;
+                }
                 motor_fdi_guarded_cycles++;
                 return;
             }
@@ -1526,13 +1573,23 @@ void ModeAdaptive::update_auto_motor_fault_detector(float time_in_this_run)
             motor_fault_loss_estimate_pct = 0.0f;
             motor_fault_residual_ratio = 1.0f;
             motor_fault_sigma_baseline = motor_fault_sigma_filtered;
+            if (motor_bounded_enabled_this_run) {
+                motor_fdi_confirmed_at_ms = 0U;
+                motor_fdi_saturation_streak_samples = 0U;
+                motor_fdi_innovation_sign = 0;
+                motor_fdi_consistent_samples = 0;
+                motor_fdi_last_excitation_valid = false;
+            }
         }
         return;
     }
 
+    // Opt-in HIL sensitivity study, not a validated field detector.
+    // Only test weaker failures with longer confirmation and tighter fit;
+    // ordinary M29_BALLOC=0 behavior is unchanged.
     const float min_rp_moment =
         motor_pair_enabled_this_run ? MOTOR_PAIR_MIN_ESTIMATED_RP_MOMENT :
-        MOTOR_FDI_MIN_RP_MOMENT;
+        (motor_bounded_enabled_this_run ? 0.10f : MOTOR_FDI_MIN_RP_MOMENT);
     if (!isfinite(observed_norm) ||
         observed_rp < min_rp_moment) {
         motor_fault_sigma_baseline =
@@ -1584,10 +1641,23 @@ void ModeAdaptive::update_auto_motor_fault_detector(float time_in_this_run)
     // Opt-in experiment confirms from residual geometry and persistence,
     // not by comparing a failure with a fixed 60% threshold.
     const float min_confirm_loss =
-        motor_pair_enabled_this_run ? 0.0f : MOTOR_FDI_MIN_LOSS_FRACTION;
+        motor_pair_enabled_this_run ? 0.0f :
+        (motor_bounded_enabled_this_run ? 0.15f : MOTOR_FDI_MIN_LOSS_FRACTION);
+    const bool weak_hil_candidate =
+        motor_bounded_enabled_this_run &&
+        best_loss < MOTOR_FDI_MIN_LOSS_FRACTION;
+    const float fit_limit =
+        weak_hil_candidate ? 0.25f : MOTOR_FDI_MAX_RESIDUAL_RATIO;
+    const uint16_t confirm_samples =
+        weak_hil_candidate ? 40U : MOTOR_FDI_CONFIRM_SAMPLES;
+    const float motor_excitation =
+        best_motor != 0 ?
+        constrain_float(motor_fault_nominal_prev[best_motor-1U],0.0f,100.0f) :
+        0.0f;
     const bool severe_candidate =
         best_motor != 0 && best_loss > min_confirm_loss &&
-        best_ratio <= MOTOR_FDI_MAX_RESIDUAL_RATIO;
+        best_ratio <= fit_limit &&
+        (!weak_hil_candidate || motor_excitation >= 16.0f);
 
     if (!severe_candidate) {
         motor_fault_sigma_baseline =
@@ -1609,7 +1679,7 @@ void ModeAdaptive::update_auto_motor_fault_detector(float time_in_this_run)
         motor_fault_confirm_count = 1;
     }
 
-    if (motor_fault_confirm_count >= MOTOR_FDI_CONFIRM_SAMPLES) {
+    if (motor_fault_confirm_count >= confirm_samples) {
         motor_fault_confirmed = true;
         if (motor_bounded_enabled_this_run) {
             motor_fdi_confirmed_at_ms=AP_HAL::millis();
@@ -2311,14 +2381,15 @@ void ModeAdaptive::run()
                        (double)(sigma_m_hat_prev[3]));
 
     AP::logger().Write("L1FI",
-                       "raw,step,ratio,w,gate,held,est",
-                       "ffffBIf",
+                       "raw,step,ratio,w,gate,held,stall,est",
+                       "ffffBIIf",
                        (double)motor_fdi_raw_innovation_pct,
                        (double)motor_fdi_applied_delta_pct,
                        (double)motor_fault_residual_ratio,
                        (double)motor_fdi_excitation_w,
                        (uint8_t)motor_fdi_gate_code,
                        (uint32_t)motor_fdi_guarded_cycles,
+                       (uint32_t)motor_fdi_saturation_streak_samples,
                        (double)motor_fault_loss_estimate_pct);
 
     AP::logger().Write("L1BA", "ena,sat,Freq,Fpred,Er,Ep,Freeze",
