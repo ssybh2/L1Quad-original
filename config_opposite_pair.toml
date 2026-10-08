@@ -151,15 +151,25 @@ loss_filter_alpha = 0.08
 max_loss_step_percent = 2.5
 confidence_gate = 0.20
 
-# Starting/UNVALIDATED gain values for 10%-step tuning.
-# Edit these independently; each interpolation between two anchors is linear.
-# The original calibrated >=50% anchors below are preserved.
+# INDEPENDENT 10%-step parameter sets (0,10,...100%).
+# Edit EACH block separately: kp, kv, kr, ko, max_tilt_deg and
+# max_yaw_rate_deg_s. These are research starting values, NOT safe flight gains.
+# An injected 37% means interpolation 30% -> 40%, not rounding to 30% or 40%.
+[gain_schedule.loss_0]
+kp = [4.0, 1.0, 10.0]
+kv = [4.0, 4.0, 6.0]
+kr = [1.0, 0.35, 0.2]
+ko = [0.1, 0.2, 0.1]
+max_tilt_deg = 30.0
+max_yaw_rate_deg_s = 180.0
+
 [gain_schedule.loss_10]
 kp = [4.3, 1.9, 10.0]
 kv = [3.6, 3.6, 5.2]
 kr = [1.0, 0.38, 0.21]
 ko = [0.1, 0.2, 0.1]
 max_tilt_deg = 30.0
+max_yaw_rate_deg_s = 180.0
 
 [gain_schedule.loss_20]
 kp = [4.6, 2.8, 10.0]
@@ -167,6 +177,7 @@ kv = [3.2, 3.2, 4.4]
 kr = [1.0, 0.41, 0.22]
 ko = [0.1, 0.2, 0.1]
 max_tilt_deg = 30.0
+max_yaw_rate_deg_s = 180.0
 
 [gain_schedule.loss_30]
 kp = [4.9, 3.7, 10.0]
@@ -174,6 +185,7 @@ kv = [2.8, 2.8, 3.6]
 kr = [1.0, 0.44, 0.23]
 ko = [0.1, 0.2, 0.1]
 max_tilt_deg = 30.0
+max_yaw_rate_deg_s = 180.0
 
 [gain_schedule.loss_40]
 kp = [5.2, 4.6, 10.0]
@@ -181,6 +193,7 @@ kv = [2.4, 2.4, 2.8]
 kr = [1.0, 0.47, 0.24]
 ko = [0.1, 0.2, 0.1]
 max_tilt_deg = 30.0
+max_yaw_rate_deg_s = 180.0
 
 [gain_schedule.loss_50]
 kp = [5.5, 5.5, 10.0]
@@ -188,6 +201,7 @@ kv = [2.0, 2.0, 2.0]
 kr = [1.0, 0.5, 0.25]
 ko = [0.1, 0.2, 0.1]
 max_tilt_deg = 30.0
+max_yaw_rate_deg_s = 180.0
 
 [gain_schedule.loss_60]
 kp = [5.5, 5.5, 10.0]
@@ -195,6 +209,7 @@ kv = [4.0, 4.0, 2.0]
 kr = [1.0, 0.5, 0.25]
 ko = [0.1, 0.2, 0.1]
 max_tilt_deg = 30.0
+max_yaw_rate_deg_s = 180.0
 
 [gain_schedule.loss_70]
 kp = [8.0, 8.0, 10.0]
@@ -202,6 +217,7 @@ kv = [5.0, 5.0, 2.0]
 kr = [0.5, 0.5, 0.25]
 ko = [1.0, 1.0, 0.1]
 max_tilt_deg = 70.0
+max_yaw_rate_deg_s = 180.0
 
 [gain_schedule.loss_80]
 kp = [10.0, 10.0, 10.0]
@@ -209,6 +225,7 @@ kv = [8.0, 8.0, 2.0]
 kr = [1.0, 0.5, 0.25]
 ko = [1.0, 1.0, 1.0]
 max_tilt_deg = 30.0
+max_yaw_rate_deg_s = 180.0
 
 [gain_schedule.loss_90]
 kp = [20.0, 20.0, 10.0]
@@ -216,6 +233,7 @@ kv = [8.0, 8.0, 2.0]
 kr = [0.5, 0.5, 0.25]
 ko = [1.5, 1.5, 0.1]
 max_tilt_deg = 30.0
+max_yaw_rate_deg_s = 180.0
 
 [gain_schedule.loss_100]
 kp = [4.0, 4.0, 10.0]
@@ -223,17 +241,16 @@ kv = [4.0, 4.0, 2.0]
 kr = [1.0, 0.5, 0.25]
 ko = [0.1, 0.2, 0.1]
 max_tilt_deg = 30.0
+max_yaw_rate_deg_s = 180.0
 
 # Observer-confirmed diagonal rotor matching is deliberately opt-in.
 # Keep this base configuration unchanged for single-motor FDI comparison.
-# 10%-step editable speed envelope. Example INITIAL values, not tuned.
-# Values correspond to loss=[0,10,20,30,40,50,60,70,80,90,100] percent.
-# Intermediate fault percentages use LINEAR interpolation.
-# This is physical rotor moment feedback; NO manual clipping of gyro state.
+# Physical yaw-rate feedback and independent per-loss speed caps ABOVE.
+# Example: gain_schedule.loss_30.max_yaw_rate_deg_s may differ from 40%.
+# Speed cap is softly tracked by rotor reaction torque; never clips gyro state.
 [yaw_rate_schedule]
 enabled = true
 loss_nodes_percent = [0,10,20,30,40,50,60,70,80,90,100]
-max_yaw_rate_deg_s = [180,180,180,180,180,180,180,180,180,180,180]
 brake_start_fraction = 0.75
 rate_gain_nm_per_rps = 0.08
 max_corrective_moment_nm = 0.20
