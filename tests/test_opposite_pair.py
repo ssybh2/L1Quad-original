@@ -147,6 +147,23 @@ class OppositePairTests(unittest.TestCase):
         self.assertEqual(pair.failed_motor_id, 1)
         self.assertEqual(pair.opposite_motor_id, 2)
 
+    def test_confirmed_identity_quality_survives_low_innovation_snr(self):
+        pair = OppositePairExperiment({"enabled": True},
+                                      {"mass_kg": 1., "gravity_mps2": 9.8},
+                                      ToyMotor(), 30.)
+        fault = SimpleNamespace(motor_id=1, loss_percent=70.)
+        # The identity was confidently fitted before reallocation, while
+        # the near-zero innovation has poor normalized fit as it converges.
+        detector = SimpleNamespace(confirmed=True, detected_id=1,
+                                   loss_estimate_percent=70.,
+                                   residual_ratio=0.92,
+                                   identity_fit_ratio=0.03)
+        pair.update(5., [0., 0., -1.], [0., 0., 0.], 1., True, fault, detector)
+        self.assertFalse(pair.active)
+        pair.update(5.2, [0., 0., -1.], [0., 0., 0.], 1., True, fault, detector)
+        self.assertTrue(pair.active)
+        self.assertEqual(pair.opposite_motor_id, 2)
+
     def test_exact_zero_injection_is_no_fault(self):
         pair = OppositePairExperiment({"enabled": True, "source": "oracle"},
                                       {"mass_kg": 1., "gravity_mps2": 9.8},
