@@ -1333,10 +1333,9 @@ class GainScheduler:
 
     def at_loss(self, loss_percent):
         loss = float(np.clip(loss_percent, 0.0, 100.0))
-        if loss <= 45.0:
-            return self._copy(self.base)
-        if loss < 50.0:
-            return self._interpolate(self.base, self.anchors[50], (loss-45.0)/5.0)
+        if loss <= 50.0:
+            # Continuous gain interpolation from healthy 0% to 50% anchor.
+            return self._interpolate(self.base, self.anchors[50], loss/50.0)
         if loss >= 100.0:
             return self._copy(self.anchors[100])
         lower = int(np.clip(math.floor((loss-50.0)/10.0), 0, 4))*10 + 50
@@ -1354,7 +1353,7 @@ class GainScheduler:
             valid = (
                 np.isfinite(detector.loss_estimate_percent)
                 and np.isfinite(detector.residual_ratio)
-                and detector.loss_estimate_percent >= 40.0
+                and detector.loss_estimate_percent > 0.0
                 and (detector.confirmed or detector.residual_ratio <= fit_limit)
             )
             if valid:
