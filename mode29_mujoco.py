@@ -1549,6 +1549,15 @@ def run(cfg):
     next_print = 0.0
     max_err = 0.0
     max_tilt = 0.0
+    divergence_since_s = None
+    divergence_limit_m = float(cfg.get("safety", {}).get(
+        "position_divergence_abort_m", float("inf")
+    ))
+    divergence_hold_s = float(cfg.get("safety", {}).get(
+        "position_divergence_hold_s", 0.06
+    ))
+    if divergence_limit_m <= 0 or divergence_hold_s < 0:
+        raise ValueError("invalid safety position divergence envelope")
     aborted = False
     reason = ""
     previous_protection_key = (False, 0, False)
@@ -1993,6 +2002,25 @@ def run(cfg):
                     "active_kox":active_tuning["ko"][0],"active_koy":active_tuning["ko"][1],"active_koz":active_tuning["ko"][2],
                     "active_max_tilt_deg":active_tuning["max_tilt_deg"],
                 })
+
+                # Controlled termination is safer than continuing a
+                # physically unreachable wrench until MuJoCo flies meters
+                # away. Applies to ANY nonzero motor fault fraction.
+                if fault_active and err > divergence_limit_m:
+                    if divergence_since_s is None:
+                        divergence_since_s = float(data.time)
+                    if data.time-divergence_since_s >= divergence_hold_s:
+                        aborted = True
+                        reason = (
+                            f"controlled safety stop: faulted position error "
+                            f"{err:.3f}m exceeded {divergence_limit_m:.3f}m "
+                            f"for {divergence_hold_s:.3f}s; actual allocator "
+                            f"feasibility={allocator_diag.get('primary_feasible', 'unknown')}"
+                        )
+                        print(reason)
+                        break
+                else:
+                    divergence_since_s = None
 
                 if data.time + 1e-12 >= next_print:
                     print(
