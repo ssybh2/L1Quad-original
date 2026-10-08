@@ -1274,7 +1274,7 @@ class BlindMotorFaultDetector:
 
 
 class GainScheduler:
-    """Piecewise-linear 50..100% Mode29 gain and tilt scheduler."""
+    """Editable 0,10,...,100% gain/tilt anchors; linear interpolate any severity."""
 
     def __init__(self, cfg, base_gains, safety):
         mode = cfg.get("mode", "disabled")
@@ -1289,16 +1289,35 @@ class GainScheduler:
             "ko": np.array([base_gains["kox"], base_gains["koy"], base_gains["koz"]], dtype=float),
             "max_tilt_deg": float(safety["max_tilt_deg"]),
         }
-        self.anchors = {}
-        for loss in range(50, 101, 10):
+        self.anchors = {0: self._copy(self.base)}
+        # Existing 50..100 anchors are preserved. Missing intermediate anchors
+        # inherit the 0..50 straight line until each 10% point is tuned.
+        fifty = cfg.get("loss_50", {})
+        default_50 = {
+            "kp": np.asarray(fifty.get("kp", self.base["kp"]), dtype=float),
+            "kv": np.asarray(fifty.get("kv", self.base["kv"]), dtype=float),
+            "kr": np.asarray(fifty.get("kr", self.base["kr"]), dtype=float),
+            "ko": np.asarray(fifty.get("ko", self.base["ko"]), dtype=float),
+            "max_tilt_deg": float(fifty.get("max_tilt_deg", self.base["max_tilt_deg"])),
+        }
+        for loss in range(10, 101, 10):
+            if loss < 50:
+                defaults = self._interpolate(self.base, default_50, loss / 50.0)
+            else:
+                defaults = self.base
             anchor = cfg.get(f"loss_{loss}", {})
             self.anchors[loss] = {
-                "kp": np.asarray(anchor.get("kp", self.base["kp"]), dtype=float),
-                "kv": np.asarray(anchor.get("kv", self.base["kv"]), dtype=float),
-                "kr": np.asarray(anchor.get("kr", self.base["kr"]), dtype=float),
-                "ko": np.asarray(anchor.get("ko", self.base["ko"]), dtype=float),
-                "max_tilt_deg": float(anchor.get("max_tilt_deg", self.base["max_tilt_deg"])),
+                "kp": np.asarray(anchor.get("kp", defaults["kp"]), dtype=float),
+                "kv": np.asarray(anchor.get("kv", defaults["kv"]), dtype=float),
+                "kr": np.asarray(anchor.get("kr", defaults["kr"]), dtype=float),
+                "ko": np.asarray(anchor.get("ko", defaults["ko"]), dtype=float),
+                "max_tilt_deg": float(anchor.get("max_tilt_deg", defaults["max_tilt_deg"])),
             }
+            for key in ("kp", "kv", "kr", "ko"):
+                if self.anchors[loss][key].shape != (3,) or not np.isfinite(self.anchors[loss][key]).all():
+                    raise ValueError(f"loss_{loss}.{key} must contain 3 finite gains")
+            if not (5.0 <= self.anchors[loss]["max_tilt_deg"] <= 60.0):
+                raise ValueError(f"loss_{loss}.max_tilt_deg must be in [5,60] degrees")
         self.alpha = float(cfg.get("loss_filter_alpha", 0.08))
         self.max_step = float(cfg.get("max_loss_step_percent", 2.5))
         self.confidence_gate = float(cfg.get("confidence_gate", 0.20))
@@ -1334,13 +1353,11 @@ class GainScheduler:
 
     def at_loss(self, loss_percent):
         loss = float(np.clip(loss_percent, 0.0, 100.0))
-        if loss <= 50.0:
-            # Continuous gain interpolation from healthy 0% to 50% anchor.
-            return self._interpolate(self.base, self.anchors[50], loss/50.0)
         if loss >= 100.0:
             return self._copy(self.anchors[100])
-        lower = int(np.clip(math.floor((loss-50.0)/10.0), 0, 4))*10 + 50
-        return self._interpolate(self.anchors[lower], self.anchors[lower+10], (loss-lower)/10.0)
+        lower = min(90, int(math.floor(loss / 10.0)) * 10)
+        return self._interpolate(self.anchors[lower], self.anchors[lower + 10],
+                                 (loss - lower) / 10.0)
 
     def update(self, injector_active, injected_loss, detector):
         raw_loss = 0.0
