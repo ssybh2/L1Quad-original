@@ -1460,10 +1460,12 @@ void ModeAdaptive::run()
 
     VectorN<float, 4> motorPWM = motorPWMCommanded;
 
-    if (motor_degradation_active) {
-        const uint8_t motor_index = motor_degradation_motor_id - 1;
-        const float effectiveness = 1.0f - motor_degradation_loss_pct * 0.01f;
-
+    // Apply both simulated impairments through the *same thrust-domain* mapping
+    // instead of multiplying PWM; equal losses mean equal thrust effectiveness.
+    const auto apply_modelled_motor_loss = [&](uint8_t motor_index,
+                                               float loss_pct) {
+        const float effectiveness =
+            1.0f - 0.01f * constrain_float(loss_pct, 0.0f, 100.0f);
         const float w_nom = motorPWMCommanded[motor_index];
 #if (!REAL_OR_SITL)
         const float deg_a_F = 0.0014597f;
@@ -1478,7 +1480,19 @@ void ModeAdaptive::run()
         const float thrust_applied = MAX(0.0f, effectiveness * thrust_nom);
         motorPWM[motor_index] = softdrone_w_from_thrust(thrust_applied);
 #endif
-        motorPWM[motor_index] = constrain_float(motorPWM[motor_index], 0.0f, 100.0f);
+        motorPWM[motor_index] =
+            constrain_float(motorPWM[motor_index], 0.0f, 100.0f);
+    };
+
+    if (motor_degradation_active) {
+        apply_modelled_motor_loss(motor_degradation_motor_id - 1U,
+                                 motor_degradation_loss_pct);
+        if (motor_pair_active &&
+            motor_pair_opposite_id >= 1 && motor_pair_opposite_id <= 4 &&
+            motor_pair_opposite_id != motor_degradation_motor_id) {
+            apply_modelled_motor_loss(motor_pair_opposite_id - 1U,
+                                     motor_pair_loss_pct);
+        }
     }
 
     // disarm the vehicle by setting PWM to 1 when landing is completed
@@ -2101,9 +2115,10 @@ VectorN<float, 4> ModeAdaptive::motorMixingYawFree(VectorN<float, 4> thrustMomen
 VectorN<float, 4> ModeAdaptive::motorMixingYawFreeEffectivenessAware(
     VectorN<float, 4> thrustMomentCmd,
     uint8_t degraded_motor_id,
-    float estimated_loss_pct)
+    float estimated_loss_pct,
+    uint8_t mirrored_motor_id)
 {
-    // Reduced-attitude allocation with one estimated motor effectiveness.
+    // Yaw-free allocation with one or (when paired) two reduced effectiveness values.
     //
     // The commanded per-motor thrust vector f_cmd is solved from
     //     [F Mx My]^T = B * diag(eta) * f_cmd
@@ -2132,6 +2147,10 @@ VectorN<float, 4> ModeAdaptive::motorMixingYawFreeEffectivenessAware(
     eta[degraded_motor_id - 1U] =
         1.0f -
         constrain_float(estimated_loss_pct, 0.0f, 100.0f) * 0.01f;
+    if (mirrored_motor_id >= 1 && mirrored_motor_id <= 4 &&
+        mirrored_motor_id != degraded_motor_id) {
+        eta[mirrored_motor_id - 1U] = eta[degraded_motor_id - 1U];
+    }
 
     const float roll_coeff[4] = {
         -0.5f * L, +0.5f * L, +0.5f * L, -0.5f * L
