@@ -53,6 +53,9 @@ class FdiAntiWindupTests(unittest.TestCase):
         self.assertIn("motor_fdi_confirmed_at_ms", STATE)
         self.assertIn("motor_fdi_consistent_samples", STATE)
         self.assertIn("} // legacy FDI path", CODE)
+        self.assertIn(
+            "motor_bounded_enabled_this_run ? motor_fault_confirmed :", CODE
+        )
 
     def test_log67_delayed_residual_no_immediate_overestimate(self):
         # The old integrator 0.05 * 0.7 * 100 per 400-Hz step would
