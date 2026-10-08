@@ -1,4 +1,9 @@
 # EXPERIMENT ONLY: first validate in SITL / propellers removed.
+# Motor-loss command is continuous from 0.0 to 100.0 inclusive. No special
+# 60% arming/decision threshold: 50/60/.../100 values below are simply gain
+# interpolation anchors. 0% means no fault; 100% opposite-pair allocation
+# may be physically rank-deficient, so the controller must reject activation.
+
 # Applies M29_PAIR_EN=1. Do not use for ordinary flight.
 # Requires matching Pixhawk firmware feature/mode29-pixhawk-next-from-20261006.
 # Freeze and compare L1DG/L1FD/L1GS/L1PR logs; no 2026-10-07 YAW parameters.
