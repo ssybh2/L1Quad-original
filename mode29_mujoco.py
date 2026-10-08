@@ -10,6 +10,8 @@ from pathlib import Path
 import mujoco
 import mujoco.viewer
 import numpy as np
+from opposite_pair_sim import (OppositePairExperiment, allocate_opposite_pair,
+                               apply_opposite_model_loss)
 
 
 # Controller NED/FRD <-> MuJoCo NWU/FLU.
@@ -1423,6 +1425,9 @@ def run(cfg):
         float(traj["takeoff_time_s"])+float(traj["settle_time_s"]),
     )
     scheduler = GainScheduler(cfg.get("gain_schedule", {}), cfg["gains"], cfg["safety"])
+    pair = OppositePairExperiment(
+        cfg.get("opposite_pair", {}), v, motor, float(cfg["safety"]["max_tilt_deg"])
+    )
 
     log_path = Path(sim["log_csv"])
     if not log_path.is_absolute():
@@ -1453,6 +1458,9 @@ def run(cfg):
         "F_actual_N","Mx_actual_Nm","My_actual_Nm","Mz_actual_Nm",
         "tilt_limiter","allocator_mode","yaw_free_active","candidate_protection_active",
         "fault_active","fault_motor","fault_loss_pct","fault_effectiveness",
+        "pair_enabled","pair_active","pair_inhibited","pair_failed_motor",
+        "pair_opposite_motor","pair_loss_estimate_pct","pair_static_margin",
+        "pair_estimate_bias_pp","pair_xy_error_m","pair_z_error_m",
         "fdi_state","fdi_motor","fdi_candidate","fdi_confirm_count","fdi_recovery_count",
         "fdi_loss_estimate_pct","fdi_residual_ratio","fdi_sigma_mx","fdi_sigma_my","fdi_sigma_mz",
         "schedule_mode","schedule_raw_loss_pct","schedule_loss_pct","schedule_confidence",
@@ -1484,6 +1492,7 @@ def run(cfg):
             f"{fault.start_time:.2f}s..{fault_end}, blind={fault.blind_fdi}"
         )
     print(f"blind FDI        : {'ON' if detector.enabled else 'OFF'}")
+    print(f"opposite pair    : {'ENABLED (research)' if pair.enabled else 'OFF / original mode'}")
     if detector.yaw_rate_safety_limit_enabled:
         print(f"yaw-rate safety  : +/-{detector.yaw_rate_safety_limit:.3f} rad/s (yaw-free only)")
     else:
@@ -1506,7 +1515,7 @@ def run(cfg):
     max_tilt = 0.0
     aborted = False
     reason = ""
-    previous_protection_key = (False, 0)
+    previous_protection_key = (False, 0, False)
     l1_hold_until = 0.0
     yaw_rate_prelimit_rps = float((S @ data.qvel[3:6])[2])
     yaw_rate_limiter_active = False
@@ -1531,7 +1540,13 @@ def run(cfg):
                 detector.update(
                     data.time,
                     meas_Omega,
-                    freeze_confirmed_estimate=yaw_rate_limiter_active,
+                    freeze_confirmed_estimate=yaw_rate_limiter_active or pair.active,
+                )
+                fault_active_now = fault.is_active(data.time)
+                pair.update(
+                    data.time, meas_pos, meas_Omega,
+                    float(traj["takeoff_altitude_m"]), fault_active_now,
+                    fault, detector,
                 )
                 candidate_protection_active = (
                     not detector.confirmed
@@ -1548,12 +1563,12 @@ def run(cfg):
                 protection_key = (
                     bool(protection_active),
                     int(protection_motor) if protection_active else 0,
+                    bool(pair.active),
                 )
                 fdi_topology_changed = protection_key != previous_protection_key
                 previous_protection_key = protection_key
                 if fdi_topology_changed:
                     l1_hold_until = data.time + l1.topology_transition_hold
-                fault_active_now = fault.is_active(data.time)
                 active_tuning = scheduler.update(
                     fault_active_now,
                     fault.loss_percent,
@@ -1584,7 +1599,11 @@ def run(cfg):
                     )
                     cmd = out["cmd"].copy()
                     if yaw_free_active:
-                        if detector.confirmed or candidate_protection_active:
+                        if pair.enabled:
+                            # Pair experiment releases yaw without rate damping;
+                            # measured spin and its abort guard remain observable.
+                            cmd[3] = 0.0
+                        elif detector.confirmed or candidate_protection_active:
                             # Keep yaw angle free during the fault and damp only
                             # its rate through the allocator's null-space authority.
                             cmd[3] = float(np.clip(
@@ -1621,7 +1640,13 @@ def run(cfg):
                     if (not np.isfinite(total_cmd).all()) or total_cmd[0] <= 0.0:
                         raise RuntimeError(f"invalid L1-augmented output: {total_cmd}")
 
-                    if protection_active:
+                    if pair.active:
+                        allocator_mode = "opposite_pair_fdi_yaw_free"
+                        w_cmd = allocate_opposite_pair(
+                            mixer, total_cmd,
+                            pair.failed_motor_id, pair.estimated_loss_percent,
+                        )
+                    elif protection_active:
                         allocator_mode = (
                             "fdi_effectiveness_aware"
                             if detector.confirmed
@@ -1632,6 +1657,11 @@ def run(cfg):
                             protection_motor,
                             protection_loss,
                         )
+                    elif pair.enabled and detector.yaw_free_latched:
+                        # After synthetic pairing ends, preserve yaw freedom
+                        # without restoring the old null-space damping.
+                        allocator_mode = "pair_fallback_yaw_free"
+                        w_cmd = mixer.allocate_yaw_free(total_cmd)
                     elif detector.yaw_free_latched and detector.recovered_at_s is not None:
                         # The source branch deliberately keeps yaw angle free
                         # after recovery. MuJoCo has no aerodynamic body drag,
@@ -1665,6 +1695,11 @@ def run(cfg):
                     motor,
                     data.time,
                 )
+                if pair.active:
+                    w_applied = apply_opposite_model_loss(
+                        w_applied, motor, pair.opposite_motor_id,
+                        pair.estimated_loss_percent,
+                    )
                 thrusts, moments = motor_dist.actual_forces(w_applied, motor)
 
                 apply_rotors(model, data, body_id, site_ids, thrusts, moments, R_mj)
@@ -1724,6 +1759,19 @@ def run(cfg):
                     "fault_motor":fault.motor_id if fault_active else 0,
                     "fault_loss_pct":fault.loss_percent if fault_active else 0.0,
                     "fault_effectiveness":fault_effectiveness,
+                    "pair_enabled":int(pair.enabled),
+                    "pair_active":int(pair.active),
+                    "pair_inhibited":int(pair.inhibited),
+                    "pair_failed_motor":pair.failed_motor_id,
+                    "pair_opposite_motor":pair.opposite_motor_id,
+                    "pair_loss_estimate_pct":pair.estimated_loss_percent,
+                    "pair_static_margin":pair.static_thrust_margin,
+                    "pair_estimate_bias_pp":(
+                        detector.loss_estimate_percent-fault.loss_percent
+                        if fault_active else 0.0
+                    ),
+                    "pair_xy_error_m":float(np.linalg.norm(meas_pos[:2])),
+                    "pair_z_error_m":abs(float(meas_pos[2]+traj["takeoff_altitude_m"])),
                     "fdi_state":detector.state,
                     "fdi_motor":detector.detected_id,
                     "fdi_candidate":detector.candidate_id,
@@ -1768,6 +1816,7 @@ def run(cfg):
                 if (
                     detector.yaw_rate_safety_limit_enabled
                     and yaw_free_active
+                    and not pair.enabled
                 ):
                     (
                         yaw_rate_prelimit_rps,
@@ -1808,6 +1857,9 @@ def run(cfg):
     print(f"FDI confirmed at : {detector.confirmed_at_s if detector.confirmed_at_s is not None else 'not detected'}")
     print(f"FDI recovered at : {detector.recovered_at_s if detector.recovered_at_s is not None else 'not recovered'}")
     print(f"yaw-free latched : {detector.yaw_free_latched}")
+    print(f"pair engaged at  : {pair.activated_at_s if pair.activated_at_s is not None else 'never'}")
+    print(f"pair active/lock : {pair.active}/{pair.inhibited}")
+    print(f"pair reason      : {pair.reason or '-'}")
     print(f"CSV              : {log_path}")
     print("="*72)
 
