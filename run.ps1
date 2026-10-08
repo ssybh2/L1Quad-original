@@ -7,8 +7,8 @@ param(
 )
 
 Set-Location $PSScriptRoot
-$selectedConfig = if ($Pair) { '.\\config_opposite_pair.toml' } else { '.\\config.toml' }
-$simArgs = @('.\\mode29_mujoco.py', '--config', $selectedConfig)
+$selectedConfig = if ($Pair) { '.\config_opposite_pair.toml' } else { '.\config.toml' }
+$simArgs = @('.\mode29_mujoco.py', '--config', $selectedConfig)
 if ($Headless) { $simArgs += '--headless' }
 if ($NoRealtime) { $simArgs += '--no-realtime' }
 if ($PSBoundParameters.ContainsKey('LossPercent')) {
