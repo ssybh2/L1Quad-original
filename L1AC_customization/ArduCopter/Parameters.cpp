@@ -663,6 +663,13 @@ const AP_Param::Info Copter::var_info[] = {
     // @User: Advanced
     GSCALAR(m29_pair_en, "M29_PAIR_EN", M29_PAIR_EN_DEFAULT),
 
+    // @Param: M29_BALLOC
+    // @DisplayName: Mode29 bounded wrench allocator - HIL ONLY
+    // @Description: Disabled by default. Opt-in thrust-first constrained control allocation for unpowered SITL/HIL testing. Not qualified for propeller-on operation.
+    // @Values: 0:Disabled,1:HILExperimental
+    // @User: Advanced
+    GSCALAR(m29_balloc_en, "M29_BALLOC", 0),
+
     // @Param: M29_G50_KPX
     // @DisplayName: Mode29 50% loss KPX
     // @Description: Position-loop gain anchor used by Mode29 gain scheduling at 50% estimated motor thrust-effectiveness loss.
