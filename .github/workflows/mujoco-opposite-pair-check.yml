@@ -32,6 +32,10 @@ jobs:
       - name: Assert that oracle case actually exercises pair mode
         run: |
           python -c "import csv; rows=list(csv.DictReader(open('logs/mode29_opposite_pair_oracle.csv'))); active=sum(int(x['pair_active']) for x in rows); print('pair_active samples:',active); assert active>0, 'oracle pair mode never engaged'"
+      - name: Summarize both paired-fault simulations
+        run: |
+          python analyze_pair_log.py logs/mode29_opposite_pair_blind.csv
+          python analyze_pair_log.py logs/mode29_opposite_pair_oracle.csv
       - name: Upload simulation log for diagnosis
         if: always()
         uses: actions/upload-artifact@v4
