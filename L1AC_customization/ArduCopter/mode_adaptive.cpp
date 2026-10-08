@@ -487,7 +487,8 @@ void ModeAdaptive::update_motor_pair_mode(bool motor_degradation_active)
     const float eta = 1.0f - 0.01f * loss_pct;
 
 #if REAL_OR_SITL
-    const float maximum_one_motor_thrust = softdrone_thrust_from_w(100.0f);
+    // Use only the thrust-stand validated range (<= 1800 us) for the guard.
+    const float maximum_one_motor_thrust = softdrone_thrust_from_w(80.0f);
 #else
     const float maximum_one_motor_thrust =
         0.0014597f * 100.0f * 100.0f + 0.043693f * 100.0f;
@@ -1553,7 +1554,8 @@ void ModeAdaptive::run()
         mode29_finite(pair_log_position);
     const Vector3f pair_log_gyro = AP::ahrs().get_gyro();
     const float pair_log_xy = pair_log_position_ok ?
-        sqrtf(sq(pair_log_position.x) + sq(pair_log_position.y)) : -1.0f;
+        sqrtf(pair_log_position.x * pair_log_position.x +
+              pair_log_position.y * pair_log_position.y) : -1.0f;
     const float pair_log_z = pair_log_position_ok ?
         fabsf(pair_log_position.z + takeoffAlt) : -1.0f;
     const float pair_log_yaw_rate =
