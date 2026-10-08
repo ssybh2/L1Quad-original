@@ -2072,6 +2072,7 @@ private:
     float motor_bounded_injected_loss_pct = 0.0f;
     uint8_t motor_bounded_injected_motor_id = 0U;
     bool motor_bounded_recovery_active = false;
+    uint32_t motor_bounded_recovery_cooldown_until_ms = 0U;
     float motor_bounded_yaw_min_nm = 0.0f;
     float motor_bounded_yaw_max_nm = 0.0f;
     bool motor_bounded_yaw_unbrakeable = false;
