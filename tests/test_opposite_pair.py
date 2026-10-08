@@ -74,9 +74,13 @@ class OppositePairTests(unittest.TestCase):
         self.assertEqual(pair.opposite_motor_id, 2)
         self.assertEqual(pair.estimated_loss_percent, 62.)
 
-        pair.update(5.01, [.7, 0., -1.], [0., 0., 0.], 1., True, fault, detector)
+        pair.update(5.21, [.7, 0., -1.], [0., 0., 0.], 1., True, fault, detector)
         self.assertFalse(pair.active)
-        self.assertTrue(pair.inhibited)
+        self.assertFalse(pair.inhibited, "transient position guard must be retryable")
+        self.assertTrue(pair.retry_pending)
+        self.assertGreater(pair.retry_at_s, 5.21)
+        pair.update(5.7, [0., 0., -1.], [0., 0., 0.], 1., True, fault, detector)
+        self.assertTrue(pair.active, "pair must re-arm after state returns inside guard")
 
     def test_wrong_motor_is_blocked(self):
         pair = OppositePairExperiment({"enabled": True},
