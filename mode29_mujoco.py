@@ -1071,6 +1071,7 @@ class BlindMotorFaultDetector:
         self.loss_estimate_percent = 0.0
         self.residual_ratio = 1.0
         self.sigma_filtered = np.zeros(3)
+        self.signature_filtered = np.zeros((4, 3))
         self.sigma_baseline = np.zeros(3)
         self.sigma_observed = np.zeros(3)
         self.sigma_valid = False
@@ -1079,6 +1080,13 @@ class BlindMotorFaultDetector:
         self.prev_w_nominal = None
         self.confirmed_at_s = None
         self.recovered_at_s = None
+        self.cooldown_seconds = float(cfg.get("recovery_cooldown_s", 2.0))
+        self.cooldown_until_s = 0.0
+        self.loss_instant_percent = 0.0
+        self.loss_rate_pp_s = 0.0
+        self.prev_estimate_for_rate = 0.0
+        if self.cooldown_seconds < 0.0:
+            raise ValueError("recovery_cooldown_s must be >=0")
 
     @property
     def state(self):
@@ -1156,8 +1164,24 @@ class BlindMotorFaultDetector:
             self.sigma_valid = True
             return
 
+        # Filter signatures with the same kernel as the measured disturbance:
+        # fitting historical filtered residual against current motor thrust
+        # systematically underestimates loss during fast fault transients.
+        signatures_now = np.array([
+            self._loss_signature(i, self.prev_w_nominal[i]) for i in range(4)
+        ], dtype=float)
+        self.signature_filtered += self.sigma_alpha * (
+            signatures_now - self.signature_filtered
+        )
         self.sigma_filtered += self.sigma_alpha*(sigma_now - self.sigma_filtered)
         detector_gate = self.enabled and t >= self.gate_time
+
+        if t < self.cooldown_until_s:
+            self.sigma_baseline = self.sigma_filtered.copy()
+            self._reset_candidate()
+            self.loss_estimate_percent = 0.0
+            self.residual_ratio = 1.0
+            return
 
         if not detector_gate:
             self.sigma_baseline += self.baseline_alpha_fast*(self.sigma_filtered - self.sigma_baseline)
@@ -1184,13 +1208,14 @@ class BlindMotorFaultDetector:
             if freeze_confirmed_estimate:
                 self.recovery_count = 0
                 return
-            signature = self._loss_signature(idx, self.prev_w_nominal[idx])
+            signature = self.signature_filtered[idx]
             signature_norm_sq = float(signature@signature)
             if signature_norm_sq < 1.0e-9 or not np.isfinite(observed_norm):
                 self.recovery_count = 0
                 return
 
             signed_fraction = float(observed@signature/signature_norm_sq)
+            self.loss_instant_percent = 100.0*signed_fraction
             fit_error = observed - signature*signed_fraction
             self.residual_ratio = float(np.linalg.norm(fit_error)/max(observed_norm, 1.0e-4))
             if np.isfinite(signed_fraction) and (
@@ -1217,6 +1242,10 @@ class BlindMotorFaultDetector:
                 self.loss_estimate_percent = 0.0
                 self.residual_ratio = 1.0
                 self.sigma_baseline = self.sigma_filtered.copy()
+                self.cooldown_until_s = float(t) + self.cooldown_seconds
+                self.prev_omega = omega.copy()
+                self.prev_cmd = None
+                self.prev_w_nominal = None
             return
 
         if not np.isfinite(observed_norm) or observed_rp < self.min_rp_moment:
@@ -1230,7 +1259,7 @@ class BlindMotorFaultDetector:
         best_loss = 0.0
         best_ratio = float("inf")
         for idx in range(4):
-            signature = self._loss_signature(idx, self.prev_w_nominal[idx])
+            signature = self.signature_filtered[idx]
             signature_norm_sq = float(signature@signature)
             if signature_norm_sq < 1.0e-9:
                 continue
@@ -1240,6 +1269,9 @@ class BlindMotorFaultDetector:
             if np.isfinite(ratio) and ratio < best_ratio:
                 best_motor, best_loss, best_ratio = idx+1, loss_fraction, ratio
 
+        self.loss_instant_percent = 100.0*best_loss
+        self.loss_rate_pp_s = abs(100.0*best_loss - self.prev_estimate_for_rate)/self.dt
+        self.prev_estimate_for_rate = 100.0*best_loss
         self.loss_estimate_percent = 100.0*best_loss
         self.residual_ratio = best_ratio
         severe = (
