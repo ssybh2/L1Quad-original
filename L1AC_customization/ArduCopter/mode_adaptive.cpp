@@ -384,6 +384,140 @@ void ModeAdaptive::clear_auto_motor_fault()
 }
 
 
+void ModeAdaptive::reset_motor_pair_mode()
+{
+    motor_pair_enabled_this_run = false;
+    motor_pair_active = false;
+    motor_pair_inhibited = false;
+    motor_pair_fault_id = 0;
+    motor_pair_opposite_id = 0;
+    motor_pair_loss_pct = 0.0f;
+    motor_pair_capacity_ratio = 0.0f;
+}
+
+void ModeAdaptive::update_motor_pair_mode(bool motor_degradation_active)
+{
+    if (!motor_pair_enabled_this_run) {
+        return;
+    }
+
+    // This is a controlled *injection* experiment only. Never intentionally
+    // impair a second motor in response to an unplanned real motor failure.
+    // Maintain a no-rearm latch if the injected fault ends or a guard trips.
+    if (!motor_degradation_active) {
+        if (motor_pair_active || motor_pair_inhibited) {
+            motor_pair_active = false;
+            motor_pair_inhibited = true;
+            motor_fault_confirmed = false;
+            motor_fault_detected_id = 0;
+            motor_fault_candidate_id = 0;
+            motor_fault_confirm_count = 0;
+            motor_fault_recovery_count = 0;
+            motor_fault_loss_estimate_pct = 0.0f;
+            motor_fault_residual_ratio = 1.0f;
+            motor_fault_sigma_baseline = motor_fault_sigma_filtered;
+            // Do not recapture the spinning yaw target after disengagement.
+        }
+        return;
+    }
+
+    Vector3f pos;
+    const bool pos_valid =
+        ahrs.get_relative_position_NED_origin(pos) && mode29_finite(pos);
+    const Vector3f gyro = AP::ahrs().get_gyro();
+    const bool gyro_valid = mode29_finite(gyro);
+    const float xy_error =
+        pos_valid ? sqrtf(pos.x * pos.x + pos.y * pos.y) : 1.0e6f;
+    const float z_error =
+        pos_valid ? fabsf(pos.z + takeoffAlt) : 1.0e6f;
+    const float yaw_rate = gyro_valid ? fabsf(gyro.z) : 1.0e6f;
+
+    const bool guard_tripped =
+        xy_error > MOTOR_PAIR_MAX_XY_ERROR_M ||
+        z_error > MOTOR_PAIR_MAX_Z_ERROR_M ||
+        yaw_rate > MOTOR_PAIR_MAX_SPIN_RAD_S;
+
+    if (motor_pair_active) {
+        if (guard_tripped) {
+            motor_pair_active = false;
+            motor_pair_inhibited = true;
+            GCS_SEND_TEXT(MAV_SEVERITY_CRITICAL,
+                          "Mode29 pair OFF: xy=%.2f z=%.2f yaw=%.1f rad/s",
+                          (double)xy_error,
+                          (double)z_error,
+                          (double)yaw_rate);
+        }
+        return;
+    }
+
+    if (motor_pair_inhibited || guard_tripped ||
+        !motor_fault_confirmed || !motors->armed() ||
+        trajIndex != 0 || g.LandFlag ||
+        !isfinite(motor_fault_loss_estimate_pct) ||
+        !isfinite(motor_fault_residual_ratio)) {
+        return;
+    }
+
+    // Observer determines the motor and severity; injected truth is used
+    // only as a safety agreement check, NEVER as the FDI estimate.
+    if (motor_fault_detected_id < 1 ||
+        motor_fault_detected_id > 4 ||
+        motor_fault_detected_id != motor_degradation_motor_id) {
+        motor_pair_inhibited = true;
+        GCS_SEND_TEXT(MAV_SEVERITY_CRITICAL,
+                      "Mode29 pair blocked: FDI motor differs from injector");
+        return;
+    }
+
+    if (motor_fault_loss_estimate_pct <
+            100.0f * MOTOR_FDI_MIN_LOSS_FRACTION ||
+        motor_fault_residual_ratio > MOTOR_FDI_MAX_RESIDUAL_RATIO) {
+        return;
+    }
+
+    const float loss_pct =
+        constrain_float(motor_fault_loss_estimate_pct, 0.0f, 100.0f);
+    const float eta = 1.0f - 0.01f * loss_pct;
+
+#if REAL_OR_SITL
+    const float maximum_one_motor_thrust = softdrone_thrust_from_w(100.0f);
+#else
+    const float maximum_one_motor_thrust =
+        0.0014597f * 100.0f * 100.0f + 0.043693f * 100.0f;
+#endif
+    // Static necessary (not sufficient) authority check for 2 healthy + 2
+    // equally reduced motors, including worst-case configured tilt.
+    const float tilt_cos =
+        cosf(constrain_float(maxTiltDeg, 5.0f, 60.0f) * 0.01745329251994f);
+    const float required_thrust =
+        kg_vehicleMass * GRAVITY_MAGNITUDE / MAX(tilt_cos, 0.1f);
+    motor_pair_capacity_ratio =
+        (2.0f * (1.0f + eta) * maximum_one_motor_thrust) /
+        MAX(required_thrust, 1.0e-3f);
+
+    if (!isfinite(motor_pair_capacity_ratio) ||
+        motor_pair_capacity_ratio < MOTOR_PAIR_MIN_STATIC_MARGIN) {
+        motor_pair_inhibited = true;
+        GCS_SEND_TEXT(MAV_SEVERITY_CRITICAL,
+                      "Mode29 pair blocked: insufficient static thrust margin");
+        return;
+    }
+
+    // The two diagonals are (M1, M2) and (M3, M4) in Mode29's mixer.
+    const uint8_t opposite =
+        (uint8_t)((motor_fault_detected_id - 1U) ^ 1U) + 1U;
+    motor_pair_fault_id = motor_fault_detected_id;
+    motor_pair_opposite_id = opposite;
+    motor_pair_loss_pct = loss_pct;
+    motor_pair_active = true;
+
+    GCS_SEND_TEXT(MAV_SEVERITY_WARNING,
+                  "Mode29 pair ON: M%u/M%u loss %.0f%% (FDI frozen)",
+                  (unsigned)motor_pair_fault_id,
+                  (unsigned)motor_pair_opposite_id,
+                  (double)motor_pair_loss_pct);
+}
+
 void ModeAdaptive::reset_gain_schedule()
 {
     gain_schedule_loss_raw_pct = 0.0f;
