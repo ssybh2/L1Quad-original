@@ -510,6 +510,7 @@ public:
 
         // Disabled-by-default observer-confirmed opposite-motor derating experiment.
         k_param_m29_pair_en,
+        k_param_m29_balloc_en, // HIL-only bounded wrench allocation
 
         // the k_param_* space is 9-bits in size
         // 511: reserved
@@ -627,7 +628,8 @@ public:
     // Mode29 geometric-controller gain/tilt scheduling.
     // 0=disabled, 1=oracle calibration from injected loss, 2=automatic from FDI.
     AP_Int8 m29_gs_mode;
-    AP_Int8 m29_pair_en; // 0=off; 1=FDI-confirmed paired-loss injection experiment
+    AP_Int8 m29_pair_en;
+    AP_Int8 m29_balloc_en; // 0=off; 1=FDI-confirmed paired-loss injection experiment
 
     AP_Float m29_g50_kpx;
     AP_Float m29_g50_kpy;
