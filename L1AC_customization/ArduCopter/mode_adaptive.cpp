@@ -407,6 +407,20 @@ bool ModeAdaptive::init(bool ignore_checks)
     clear_auto_motor_fault();
     reset_motor_pair_mode();
     motor_pair_enabled_this_run = ((int8_t)g.m29_pair_en == 1);
+    motor_bounded_enabled_this_run = ((int8_t)g.m29_balloc_en == 1);
+    motor_bounded_primary_saturated = false;
+    motor_bounded_requested_collective_n = 0.0f;
+    motor_bounded_predicted_collective_n = 0.0f;
+    motor_bounded_roll_error_nm = 0.0f;
+    motor_bounded_pitch_error_nm = 0.0f;
+    motor_bounded_fdi_freeze_samples = 0U;
+    // Pairing's old instantaneous second-fault path has NOT been verified
+    // with the new allocator. Refuse the combined experiment in HIL build.
+    if (motor_bounded_enabled_this_run && motor_pair_enabled_this_run) {
+        GCS_SEND_TEXT(MAV_SEVERITY_CRITICAL,
+                      "Mode29 HIL: M29_BALLOC requires M29_PAIR_EN=0");
+        return false;
+    }
 
     if (!ahrs.have_inertial_nav()) {
         GCS_SEND_TEXT(MAV_SEVERITY_CRITICAL,
@@ -1068,6 +1082,16 @@ void ModeAdaptive::update_auto_motor_fault_detector(float time_in_this_run)
     // recovers, the allocator temporarily over-compensates and the projection
     // becomes negative, which drives the loss estimate back toward zero.
     if (motor_fault_confirmed) {
+        if (motor_bounded_enabled_this_run &&
+            motor_bounded_primary_saturated) {
+            // Last step could not achieve the requested F/Mx/My. The
+            // residual is then NOT an independent motor-loss measurement.
+            // Freeze severity, retain motor identity and do not falsely
+            // report recovery from a saturated control input.
+            motor_fault_recovery_count = 0;
+            motor_bounded_fdi_freeze_samples++;
+            return;
+        }
         if (motor_fault_detected_id < 1 || motor_fault_detected_id > 4) {
             clear_auto_motor_fault();
             return;
@@ -1087,6 +1111,14 @@ void ModeAdaptive::update_auto_motor_fault_detector(float time_in_this_run)
 
         const float signed_residual_fraction =
             (observed * signature) / signature_norm_sq;
+        if (motor_bounded_enabled_this_run &&
+            (!isfinite(signed_residual_fraction) ||
+             fabsf(signed_residual_fraction) > 1.0f)) {
+            // An impossible instantaneous loss must not accumulate toward
+            // the 100% saturation latch during aircraft motion.
+            motor_fault_recovery_count = 0;
+            return;
+        }
         const Vector3f fit_error =
             observed - signature * signed_residual_fraction;
         const float residual_ratio =
@@ -1677,6 +1709,29 @@ void ModeAdaptive::run()
     // mixer. Fault mode intentionally drops the yaw-moment objective so the
     // remaining actuator authority is spent on thrust, roll and pitch.
     VectorN<float, 4> motorPWMCommanded;
+#if REAL_OR_SITL
+    if (motor_bounded_enabled_this_run) {
+        const VectorN<float, 4> requested =
+            thrustMomentCmd + L1thrustMomentCmd;
+        float effectiveness[4] = {1.0f,1.0f,1.0f,1.0f};
+        if (motor_fault_confirmed &&
+            motor_fault_detected_id >= 1 && motor_fault_detected_id <= 4) {
+            effectiveness[motor_fault_detected_id-1U] =
+                1.0f-constrain_float(motor_fault_loss_estimate_pct,0.0f,100.0f)*0.01f;
+        }
+        Mode29BoundedDiag allocation;
+        if (!mode29_bounded_allocate(requested, effectiveness,
+                                     motorPWMCommanded, allocation)) {
+            abort_mode29("HIL bounded allocator failed");
+            return;
+        }
+        motor_bounded_primary_saturated = allocation.primary_saturated;
+        motor_bounded_requested_collective_n = allocation.requested_f;
+        motor_bounded_predicted_collective_n = allocation.predicted_f;
+        motor_bounded_roll_error_nm = allocation.roll_error;
+        motor_bounded_pitch_error_nm = allocation.pitch_error;
+    } else
+#endif
     if (motor_fault_confirmed) {
         motorPWMCommanded =
             motorMixingYawFreeEffectivenessAware(
@@ -1789,6 +1844,16 @@ void ModeAdaptive::run()
                        (double)(sigma_m_hat_prev[1]),
                        (double)(sigma_m_hat_prev[2]),
                        (double)(sigma_m_hat_prev[3]));
+
+    AP::logger().Write("L1BA", "ena,sat,Freq,Fpred,Er,Ep,Freeze",
+                       "BBffffI",
+                       (uint8_t)motor_bounded_enabled_this_run,
+                       (uint8_t)motor_bounded_primary_saturated,
+                       (double)motor_bounded_requested_collective_n,
+                       (double)motor_bounded_predicted_collective_n,
+                       (double)motor_bounded_roll_error_nm,
+                       (double)motor_bounded_pitch_error_nm,
+                       (uint32_t)motor_bounded_fdi_freeze_samples);
 
     // L1PR keeps the paired experiment observable alongside L1DG (injected
     // truth), L1FD (blind FDI) and L1GS (active scheduled gains).
