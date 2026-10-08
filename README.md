@@ -1,6 +1,15 @@
 # Mode29 MuJoCo: observer-gated opposite-motor spin / hover experiment
 
 **This branch builds on your uploaded MuJoCo simulation without changing the upload branch.**
+
+**Arbitrary motor-loss input:** `-LossPercent` accepts any finite percentage from
+**0% through 100%**, including decimals such as 7.5%, 23.7%, and 92.3%.
+The control scheme never treats 60% as a privileged failure magnitude.
+0% means no injected failure; 100%+100% diagonal outage cannot provide three
+independent F/Roll/Pitch inputs and is reported as infeasible, not ignored as
+an invalid motor-loss command. Blind identification may fail for small faults
+because the disturbance falls beneath the noise/observability floor.
+
 Firmware research reference: `feature/mode29-pixhawk-next-from-20261006`
 (base Oct 6 commit `2c606d7e`). This is a **simulation prototype**, not a
 verified flight-control solution.
@@ -24,7 +33,9 @@ Fast headless experiment:
 finished successfully but `FDI confirmed at: not detected` and
 `pair engaged at: never` for the 60% case. The first blind-mode run therefore
 does **not** prove the new paired controller works. The observer estimate
-was often below the source firmware's 60% confirmation threshold.
+was too weak or inconsistent to satisfy the original FDI evidence criteria.
+The updated optional experiment removes any fixed percentage threshold,
+though this does not automatically make the estimator accurate.
 
 To test the *paired allocation and spinning physics separately*, you can
 explicitly enable the SIMULATION-ONLY oracle comparison:
@@ -47,7 +58,8 @@ To compare against your original single-motor recovery behavior, omit `-Pair`:
 These run **different configs and different log CSV files**:
 - `config.toml` defaults to `[opposite_pair] enabled=false` (your old behavior);
 - `config_opposite_pair.toml` explicitly enables observer-gated pairing, retains
-  10/6 60% gain anchor, uses the firmware's 60% FDI confirmation threshold,
+  pre-existing 0..100% gain interpolation anchors, and uses residual/moment
+  observability plus persistence instead of a special FDI percentage threshold,
   releases yaw without null-space damping, and disables artificial yaw-rate clipping.
 
 The experiment still runs the position loop against NED `(0,0,-1)` after
@@ -61,8 +73,9 @@ the selected motor; a separate synthetic derating is applied to the opposite mot
 Both are applied in **thrust space** after motor lag, not as a PWM fraction.
 
 Important research limitations:
-- Only engages after confirmed single-motor FDI, at estimated/injected
-  loss <=70% and within an 8 percentage-point agreement gate;
+- Only engages after confirmed single-motor FDI and an 8 percentage-point
+  controlled-experiment agreement gate. No artificial percentage ceiling;
+  instead checks three-axis allocation rank/conditioning and thrust margin;
 - Checks position error, yaw rate and a conservative static thrust margin;
 - Freezes the single-fault estimate during the paired impairment (a
   single-fault signature is invalid once the second motor is derated);
