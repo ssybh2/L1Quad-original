@@ -137,6 +137,230 @@ float softdrone_w_from_thrust(float thrust_n)
 }
 #endif
 
+// HIL-only allocation diagnostics. Never interpret these static-model
+// predictions as measured thrust without independent motor sensing.
+struct Mode29BoundedDiag {
+    bool primary_saturated = false;
+    float requested_f = 0.0f;
+    float predicted_f = 0.0f;
+    float roll_error = 0.0f;
+    float pitch_error = 0.0f;
+};
+
+#if REAL_OR_SITL
+// Constrained 4-rotor actuator allocation. Fixed-size stack arrays,
+// deterministic CPU work, no dynamic allocation and no negative thrust.
+// Lexicographic priority: feasible collective -> nearest roll/pitch at fixed
+// collective -> only residual reaction-torque authority for yaw.
+bool mode29_bounded_allocate(const VectorN<float, 4> &desired,
+                             const float eta[4],
+                             VectorN<float, 4> &w,
+                             Mode29BoundedDiag &diag)
+{
+    constexpr float L = 0.28f;
+    constexpr float D = 0.28f;
+    constexpr float EPS = 1.0e-5f;
+    const float max_f = softdrone_thrust_from_w(100.0f);
+    const float sign[4] = {1.0f, 1.0f, -1.0f, -1.0f};
+    const float r[4] = {-0.5f*L, 0.5f*L, 0.5f*L, -0.5f*L};
+    const float p[4] = {0.5f*D, -0.5f*D, 0.5f*D, -0.5f*D};
+    float cap[4];
+    float max_total = 0.0f;
+    if (!isfinite(max_f) || max_f <= 0.0f) {
+        return false;
+    }
+    for (uint8_t i=0; i<4; i++) {
+        if (!isfinite(desired[i]) || !isfinite(eta[i]) ||
+            eta[i] < 0.0f || eta[i] > 1.0f) {
+            return false;
+        }
+        cap[i] = eta[i] * max_f;
+        max_total += cap[i];
+    }
+    const float F = constrain_float(desired[0], 0.0f, max_total);
+
+    // Analytic nullspace of B=[sum f, roll f, pitch f] is [1,1,-1,-1].
+    // Feasibility at any specified (F,Mx,My) is one scalar interval.
+    const auto interval = [&](float mx, float my, float out[4],
+                              float &lo, float &hi) -> bool {
+        out[0] = 0.25f*F - mx/(2.0f*L) + my/(2.0f*D);
+        out[1] = 0.25f*F + mx/(2.0f*L) - my/(2.0f*D);
+        out[2] = 0.25f*F + mx/(2.0f*L) + my/(2.0f*D);
+        out[3] = 0.25f*F - mx/(2.0f*L) - my/(2.0f*D);
+        lo = -1.0e9f;
+        hi = 1.0e9f;
+        for (uint8_t i=0; i<4; i++) {
+            const float a = -out[i]/sign[i];
+            const float b = (cap[i]-out[i])/sign[i];
+            lo = MAX(lo, MIN(a,b));
+            hi = MIN(hi, MAX(a,b));
+        }
+        return lo <= hi + EPS;
+    };
+
+    float mx = desired[1], my = desired[2];
+    float base[4], lo, hi;
+    if (!interval(mx,my,base,lo,hi)) {
+        // Vertices of box [0,cap_i] intersected with exact sum(f)=F.
+        // Any vertex has three active bounds. Map these vertices to a 2-D
+        // convex (Mx,My) polygon for exact nearest attainable attitude.
+        struct Point { float x; float y; };
+        Point points[32];
+        uint8_t count = 0;
+        for (uint8_t free_i=0; free_i<4; free_i++) {
+            for (uint8_t mask=0; mask<8; mask++) {
+                float f[4] = {};
+                uint8_t bit = 0;
+                float total = 0.0f;
+                for (uint8_t i=0; i<4; i++) {
+                    if (i==free_i) { continue; }
+                    f[i] = ((mask >> bit) & 1U) ? cap[i] : 0.0f;
+                    total += f[i];
+                    bit++;
+                }
+                const float free_thrust = F-total;
+                if (free_thrust < -EPS || free_thrust > cap[free_i]+EPS) {
+                    continue;
+                }
+                f[free_i] = constrain_float(free_thrust, 0.0f, cap[free_i]);
+                float x=0.0f,y=0.0f;
+                for (uint8_t i=0; i<4; i++) {
+                    x += r[i]*f[i];
+                    y += p[i]*f[i];
+                }
+                bool repeat=false;
+                for (uint8_t i=0; i<count; i++) {
+                    if (fabsf(points[i].x-x)<EPS &&
+                        fabsf(points[i].y-y)<EPS) {
+                        repeat=true;
+                        break;
+                    }
+                }
+                if (!repeat) {
+                    points[count++] = {x,y};
+                }
+            }
+        }
+        if (count==0) {
+            return false;
+        }
+        // Insertion sort: <=32 vertices, no heap, stable 400-Hz workload.
+        for (uint8_t i=1; i<count; i++) {
+            const Point key=points[i];
+            uint8_t j=i;
+            while (j>0 && (points[j-1].x>key.x ||
+                (points[j-1].x==key.x && points[j-1].y>key.y))) {
+                points[j]=points[j-1];
+                j--;
+            }
+            points[j]=key;
+        }
+        const auto cross = [](const Point &o, const Point &a,
+                              const Point &b) -> float {
+            return (a.x-o.x)*(b.y-o.y)-(a.y-o.y)*(b.x-o.x);
+        };
+        uint8_t hull[64];
+        uint8_t k=0;
+        for (uint8_t i=0; i<count; i++) {
+            while (k>=2 &&
+                cross(points[hull[k-2]],points[hull[k-1]],points[i])<=0.0f) {
+                k--;
+            }
+            hull[k++]=i;
+        }
+        const uint8_t lower_end=k+1;
+        for (int i=int(count)-2; i>=0; i--) {
+            while (k>=lower_end &&
+                cross(points[hull[k-2]],points[hull[k-1]],points[i])<=0.0f) {
+                k--;
+            }
+            hull[k++]=uint8_t(i);
+        }
+        if (k>1) { k--; }
+        float best_sq=1.0e30f;
+        for (uint8_t i=0; i<k; i++) {
+            const Point &a=points[hull[i]];
+            const Point &b=points[hull[(i+1)%k]];
+            const float dx=b.x-a.x,dy=b.y-a.y;
+            const float len2=dx*dx+dy*dy;
+            const float t=(len2>1.0e-12f) ?
+                constrain_float(((mx-a.x)*dx+(my-a.y)*dy)/len2,0.0f,1.0f)
+                : 0.0f;
+            const float x=a.x+t*dx,y=a.y+t*dy;
+            const float sq=(mx-x)*(mx-x)+(my-y)*(my-y);
+            if (sq<best_sq) {
+                best_sq=sq;
+                diag.roll_error=x-desired[1];
+                diag.pitch_error=y-desired[2];
+                // Select nearest point to requested (Mx,My).
+                // Kept in local variables until projection completes.
+            }
+        }
+        // Repeat to recover projection coordinates using the same edge order.
+        for (uint8_t i=0; i<k; i++) {
+            const Point &a=points[hull[i]];
+            const Point &b=points[hull[(i+1)%k]];
+            const float dx=b.x-a.x,dy=b.y-a.y;
+            const float len2=dx*dx+dy*dy;
+            const float t=(len2>1.0e-12f) ?
+                constrain_float(((desired[1]-a.x)*dx+
+                                (desired[2]-a.y)*dy)/len2,0.0f,1.0f)
+                : 0.0f;
+            const float x=a.x+t*dx,y=a.y+t*dy;
+            const float sq=(desired[1]-x)*(desired[1]-x)+
+                           (desired[2]-y)*(desired[2]-y);
+            if (sq <= best_sq + 1.0e-10f) {
+                mx=x;my=y;break;
+            }
+        }
+        if (!interval(mx,my,base,lo,hi)) {
+            return false;
+        }
+    }
+
+    // Use only remaining thrust nullspace for yaw. A static motor model
+    // establishes a *predicted* reaction-moment range; physical measured
+    // effectiveness may differ due ESC/battery/dynamic lag.
+    const auto yaw_at = [&](float s) -> float {
+        float mz=0.0f;
+        for (uint8_t i=0; i<4; i++) {
+            const float thrust=constrain_float(base[i]+s*sign[i],0.0f,cap[i]);
+            mz+=sign[i]*softdrone_moment_from_w(
+                softdrone_w_from_thrust(thrust));
+        }
+        return mz;
+    };
+    if (lo>hi) { lo=hi=0.5f*(lo+hi); }
+    const float yaw_a=yaw_at(lo),yaw_b=yaw_at(hi);
+    const float yaw_req=constrain_float(desired[3],MIN(yaw_a,yaw_b),
+                                         MAX(yaw_a,yaw_b));
+    // Linear interpolation is bounded, deterministic and low-cost; it is
+    // not assumed to exactly track nonlinear motor torque.
+    const float t=(fabsf(yaw_b-yaw_a)>1.0e-7f) ?
+        constrain_float((yaw_req-yaw_a)/(yaw_b-yaw_a),0.0f,1.0f) : 0.5f;
+    const float s=lo+t*(hi-lo);
+    float achieved_f=0.0f,achieved_mx=0.0f,achieved_my=0.0f;
+    for (uint8_t i=0; i<4; i++) {
+        const float f=constrain_float(base[i]+s*sign[i],0.0f,cap[i]);
+        // If effectiveness is zero, never divide by eta.
+        const float nominal=(eta[i]>1.0e-6f) ? f/eta[i] : 0.0f;
+        w[i]=constrain_float(softdrone_w_from_thrust(nominal),0.0f,100.0f);
+        const float actual=eta[i]*softdrone_thrust_from_w(w[i]);
+        achieved_f+=actual; achieved_mx+=r[i]*actual; achieved_my+=p[i]*actual;
+    }
+    diag.requested_f=desired[0];
+    diag.predicted_f=achieved_f;
+    diag.roll_error=achieved_mx-desired[1];
+    diag.pitch_error=achieved_my-desired[2];
+    diag.primary_saturated=(
+        fabsf(achieved_f-desired[0])>0.005f ||
+        fabsf(diag.roll_error)>0.005f ||
+        fabsf(diag.pitch_error)>0.005f);
+    return isfinite(achieved_f) &&
+           fabsf(achieved_f-F)<0.02f;
+}
+#endif
+
 bool mode29_finite(const Vector2f &v)
 {
     return isfinite(v.x) && isfinite(v.y);
