@@ -1787,6 +1787,15 @@ def run(cfg):
 
                     if pair.active:
                         pair.plan_mirror(data.time, dt, total_cmd, mixer)
+                        if not pair.active:
+                            # Pair was deferred by *current* position/attitude
+                            # authority. Do not carry the spin request into
+                            # the single-motor fallback on this same tick.
+                            total_cmd[3] = float(np.clip(
+                                -detector.fault_yaw_rate_damping*meas_Omega[2],
+                                -detector.fault_max_yaw_moment,
+                                detector.fault_max_yaw_moment,
+                            ))
                     if pair.active:
                         try:
                             if yaw_envelope.enabled:
