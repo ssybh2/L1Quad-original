@@ -40,7 +40,7 @@ If motor M1 (or M3) loses an inferred fraction of thrust, apply the **same fract
 - `L1FD`: FDI candidate/confirmed motor, estimated loss fraction (%), normalized signature-fit residual, observer matched moment
 - `L1GS`: gain schedule mode, raw/filtered loss and active Kp/Kv
 - `L1GA`: active KR, KO and tilt
-- `L1PR`: `enabled,active,lock,fmotor,omotor,loss,margin,rate,xyerr,zerr,bias`
+- `L1PR`: `ena,act,lock,fail,opp,loss,margin,rate,xy,z,bias`
   - `loss`: frozen observer-selected mirror loss in %
   - `bias`: live `L1FD.loss - L1DG.loss` in percentage points (diagnostic *only*); while the pair is active the FDI value is intentionally frozen
   - `margin`: static model ratio, not an actual control-authority measurement
