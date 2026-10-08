@@ -656,6 +656,13 @@ const AP_Param::Info Copter::var_info[] = {
     // @User: Advanced
     GSCALAR(m29_gs_mode, "M29_GS_MODE", M29_GS_MODE_DEFAULT),
 
+    // @Param: M29_PAIR_EN
+    // @DisplayName: Mode29 opposite-motor derating experiment
+    // @Description: Off by default. During an explicitly injected single-motor loss, mirror the observer-confirmed effectiveness loss onto the opposite motor. Requires an FDI-confirmed matching motor; guarded and experimental, not for unplanned motor failures.
+    // @Values: 0:Disabled,1:PairedLossExperiment
+    // @User: Advanced
+    GSCALAR(m29_pair_en, "M29_PAIR_EN", M29_PAIR_EN_DEFAULT),
+
     // @Param: M29_G50_KPX
     // @DisplayName: Mode29 50% loss KPX
     // @Description: Position-loop gain anchor used by Mode29 gain scheduling at 50% estimated motor thrust-effectiveness loss.
