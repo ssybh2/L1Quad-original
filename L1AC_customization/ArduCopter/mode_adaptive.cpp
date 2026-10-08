@@ -1561,7 +1561,7 @@ void ModeAdaptive::run()
     const float pair_log_yaw_rate =
         mode29_finite(pair_log_gyro) ? pair_log_gyro.z : 0.0f;
     AP::logger().Write("L1PR",
-                       "enabled,active,lock,fmotor,omotor,loss,margin,rate,xyerr,zerr,bias",
+                       "ena,act,lock,fail,opp,loss,margin,rate,xy,z,bias",
                        "BBBBBffffff",
                        (uint8_t)motor_pair_enabled_this_run,
                        (uint8_t)motor_pair_active,
