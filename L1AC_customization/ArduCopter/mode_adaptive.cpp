@@ -699,6 +699,7 @@ void ModeAdaptive::clear_auto_motor_fault()
     motor_fdi_confirmed_at_ms = 0U;
     motor_fdi_guarded_cycles = 0U;
     motor_fdi_saturation_streak_samples = 0U;
+    motor_fdi_confirmed_loss_pct = 0.0f;
     motor_fdi_last_excitation_w = 0.0f;
     motor_fdi_last_excitation_valid = false;
     motor_fdi_raw_innovation_pct = 0.0f;
@@ -1537,9 +1538,17 @@ void ModeAdaptive::update_auto_motor_fault_detector(float time_in_this_run)
         }
         } // legacy FDI path
 
+        // A fixed 35% release threshold is invalid when a bounded HIL
+        // experiment is allowed to confirm genuine 15..35% motor losses.
+        // Give every confirmed motor an approximately 2:1 recovery
+        // hysteresis. High-severity and legacy behavior remain at 35%.
+        const float hil_release_pct = constrain_float(
+            0.5f * motor_fdi_confirmed_loss_pct, 5.0f,
+            100.0f * MOTOR_FDI_RELEASE_LOSS_FRACTION);
         const float release_loss =
             motor_pair_enabled_this_run ? 0.0f :
-            (100.0f * MOTOR_FDI_RELEASE_LOSS_FRACTION);
+            (motor_bounded_enabled_this_run ? hil_release_pct :
+             100.0f * MOTOR_FDI_RELEASE_LOSS_FRACTION);
         const float min_rp_moment =
             motor_pair_enabled_this_run ? MOTOR_PAIR_MIN_ESTIMATED_RP_MOMENT :
             MOTOR_FDI_MIN_RP_MOMENT;
@@ -1576,6 +1585,7 @@ void ModeAdaptive::update_auto_motor_fault_detector(float time_in_this_run)
             if (motor_bounded_enabled_this_run) {
                 motor_fdi_confirmed_at_ms = 0U;
                 motor_fdi_saturation_streak_samples = 0U;
+                motor_fdi_confirmed_loss_pct = 0.0f;
                 motor_fdi_innovation_sign = 0;
                 motor_fdi_consistent_samples = 0;
                 motor_fdi_last_excitation_valid = false;
@@ -1682,6 +1692,7 @@ void ModeAdaptive::update_auto_motor_fault_detector(float time_in_this_run)
     if (motor_fault_confirm_count >= confirm_samples) {
         motor_fault_confirmed = true;
         if (motor_bounded_enabled_this_run) {
+            motor_fdi_confirmed_loss_pct = motor_fault_loss_estimate_pct;
             motor_fdi_confirmed_at_ms=AP_HAL::millis();
             motor_fdi_gate_code=1U;
             motor_fdi_innovation_sign=0;
