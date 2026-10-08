@@ -1495,7 +1495,7 @@ def run(cfg):
         "pair_opposite_motor","pair_loss_estimate_pct","pair_static_margin",
         "pair_estimate_bias_pp","pair_xy_error_m","pair_z_error_m",
         "pair_disengaged_time_s","pair_guard_reason",
-        "pair_yaw_cap_deg_s","pair_yaw_hard_abort_rps",
+        "pair_yaw_cap_deg_s","pair_yaw_target_deg_s","pair_yaw_hard_abort_rps",
         "pair_yaw_brake_cmd_nm","pair_yaw_allocated_nm",
         "pair_yaw_min_nm","pair_yaw_max_nm","pair_yaw_saturated",
         "fdi_state","fdi_motor","fdi_candidate","fdi_confirm_count","fdi_recovery_count",
@@ -1628,8 +1628,14 @@ def run(cfg):
                 yaw_feedback_request = 0.0
                 yaw_allocation_diag = {}
                 if pair.active and yaw_envelope.enabled:
+                    # Under the current reaction-moment convention,
+                    # reducing CCW pair M1/M2 yields negative body yaw,
+                    # reducing CW pair M3/M4 yields positive body yaw.
+                    spin_direction = (
+                        -1 if pair.failed_motor_id in (1, 2) else +1
+                    )
                     yaw_feedback_request = yaw_envelope.requested_moment(
-                        pair.estimated_loss_percent, meas_Omega[2]
+                        pair.estimated_loss_percent, meas_Omega[2], spin_direction
                     )
 
                 yaw_free_active = detector.yaw_free_latched or candidate_protection_active or (
@@ -1843,6 +1849,13 @@ def run(cfg):
                     "pair_guard_reason":pair.reason,
                     "pair_yaw_cap_deg_s":(
                         yaw_envelope.limit_deg_s(pair.estimated_loss_percent)
+                        if pair.active and yaw_envelope.enabled else 0.0
+                    ),
+                    "pair_yaw_target_deg_s":(
+                        math.degrees(yaw_envelope.target_rate_rps(
+                            pair.estimated_loss_percent,
+                            -1 if pair.failed_motor_id in (1, 2) else +1
+                        ))
                         if pair.active and yaw_envelope.enabled else 0.0
                     ),
                     "pair_yaw_hard_abort_rps":pair.yaw_abort_limit_rps if pair.active else 0.0,
