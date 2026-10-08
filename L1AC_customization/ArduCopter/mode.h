@@ -2056,6 +2056,17 @@ private:
     VectorN<float, 4> motor_fault_nominal_prev;
     bool motor_fault_nominal_prev_valid = false;
 
+    // HIL-only estimator diagnostics and observer-delay anti-windup.
+    // Kept separate from legacy FDI when M29_BALLOC=0.
+    uint32_t motor_fdi_confirmed_at_ms = 0U;
+    uint32_t motor_fdi_guarded_cycles = 0U;
+    float motor_fdi_raw_innovation_pct = 0.0f;
+    float motor_fdi_applied_delta_pct = 0.0f;
+    float motor_fdi_excitation_w = 0.0f;
+    uint8_t motor_fdi_gate_code = 0U;
+    int8_t motor_fdi_innovation_sign = 0;
+    uint8_t motor_fdi_consistent_samples = 0;
+
     // The FDI single-fault estimate is frozen once a mirrored impairment starts.
     // The two-motor residual cannot be identified by the original single-fault FDI.
     // New constrained allocation is a separately opted-in HIL-only feature.
