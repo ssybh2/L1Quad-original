@@ -1788,7 +1788,9 @@ def run(cfg):
                             pair.inhibited = True
                             pair.disengaged_at_s = float(data.time)
                             pair.reason = f"paired primary authority infeasible: {allocation_error}"
-                            detector.begin_cooldown(data.time)
+                            # No second fault was actually applied yet: the
+                            # one-motor FDI estimate remains valid. Keep it
+                            # for the single-fault effectiveness allocator.
                             l1_hold_until = data.time + l1.topology_transition_hold
                             total_cmd[3] = float(np.clip(
                                 -detector.fault_yaw_rate_damping*meas_Omega[2],
