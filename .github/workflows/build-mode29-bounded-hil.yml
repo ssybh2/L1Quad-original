@@ -5,6 +5,7 @@ on:
     branches:
       - feature/mode29-bounded-hil-20261008
       - feature/mode29-fdi-antiwindup-hil-20261008
+      - feature/mode29-fdi-robust-hil-20261008
   workflow_dispatch:
 
 jobs:
@@ -55,7 +56,8 @@ jobs:
           echo "git_commit=${GITHUB_SHA}" >> firmware-hil/BUILD_INFO.txt
           echo "M29_BALLOC=1 + M29_PAIR_EN=1 enables unvalidated HIL-only progressive pairing" >> firmware-hil/BUILD_INFO.txt
           echo "Includes staged *software injected* fault release; spontaneous real motor recovery unproven" >> firmware-hil/BUILD_INFO.txt
-          echo "HIL FDI estimate: 125ms observer settling, strict signal gates, 30pp/s rise, L1FI logging" >> firmware-hil/BUILD_INFO.txt
+          echo "HIL FDI: 125ms transition resettling, saturation observability, guarded weak-loss candidates" >> firmware-hil/BUILD_INFO.txt
+          echo "L1FI fields: raw,step,ratio,w,gate,held,stall,est" >> firmware-hil/BUILD_INFO.txt
           echo "NOT CLEARED FOR PROPELLER-ON FLIGHT; HIL/BENCH ONLY" >> firmware-hil/BUILD_INFO.txt
           ls -lh firmware-hil/
 
