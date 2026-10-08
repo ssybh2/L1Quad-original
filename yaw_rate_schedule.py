@@ -23,6 +23,7 @@ class YawRateEnvelope:
             float(anchors.get(f"loss_{int(loss)}", {}).get("max_yaw_rate_deg_s", fallback[i]))
             for i, loss in enumerate(self.nodes)
         ], dtype=float)
+        self.target_spin_fraction = float(cfg.get("target_spin_fraction", 0.65))
         self.brake_start = float(cfg.get("brake_start_fraction", 0.75))
         self.gain = float(cfg.get("rate_gain_nm_per_rps", 0.08))
         self.max_moment = float(cfg.get("max_corrective_moment_nm", 0.20))
@@ -32,7 +33,7 @@ class YawRateEnvelope:
             self.limits.shape != (11,) or
             not np.isfinite(self.limits).all() or
             (self.limits <= 0).any() or
-            not 0.0 < self.brake_start < 1.0 or
+            not 0.0 < self.target_spin_fraction < self.brake_start < 1.0 or
             not 0.0 < self.gain or
             not 0.0 < self.max_moment or
             not self.hard_abort_multiplier > 1.0):
@@ -44,16 +45,34 @@ class YawRateEnvelope:
             raise ValueError("yaw rate schedule needs a finite loss estimate")
         return float(np.interp(np.clip(x, 0.0, 100.0), self.nodes, self.limits))
 
-    def requested_moment(self, loss_percent, measured_body_yaw_rate_rps):
-        """Soft ceiling with anticipatory braking, keeping yaw *angle* free."""
-        limit = math.radians(self.limit_deg_s(loss_percent))
+    def target_rate_rps(self, loss_percent, spin_direction):
+        """Choose a nonzero stable spin reference BELOW the configurable cap."""
+        direction = float(spin_direction)
+        if direction not in (-1.0, 1.0):
+            raise ValueError("spin_direction must be +1 or -1")
+        return direction * math.radians(self.limit_deg_s(loss_percent)) * self.target_spin_fraction
+
+    def requested_moment(self, loss_percent, measured_body_yaw_rate_rps, spin_direction=1):
+        """Rotor reaction-torque P feedback, preserving untracked yaw heading.
+
+        Below the setpoint: drive the aircraft to spin; above: brake.
+        Speed is never edited directly. Unavailable rotor yaw torque is
+        reported as saturation by the allocator, not silently invented.
+        """
         rate = float(measured_body_yaw_rate_rps)
         if not math.isfinite(rate):
             raise ValueError("non-finite gyro yaw rate")
         if not self.enabled:
             return 0.0
-        excess = max(0.0, abs(rate) - self.brake_start * limit)
-        return float(-math.copysign(min(self.max_moment, self.gain * excess), rate)) if excess > 0 else 0.0
+        target = self.target_rate_rps(loss_percent, spin_direction)
+        cap = math.radians(self.limit_deg_s(loss_percent))
+        requested = self.gain * (target - rate)
+        if abs(rate) > self.brake_start * cap:
+            # Additional anticipatory braking near the envelope.
+            requested -= math.copysign(
+                self.gain * (abs(rate) - self.brake_start * cap), rate
+            )
+        return float(np.clip(requested, -self.max_moment, self.max_moment))
 
     def abort_limit_rps(self, loss_percent):
         return math.radians(self.limit_deg_s(loss_percent)) * self.hard_abort_multiplier
