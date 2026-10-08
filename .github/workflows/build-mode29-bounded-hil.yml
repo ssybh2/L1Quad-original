@@ -1,0 +1,60 @@
+name: Build Mode29 bounded allocator Pixhawk6C HIL firmware
+
+on:
+  push:
+    branches:
+      - feature/mode29-bounded-hil-20261008
+  workflow_dispatch:
+
+jobs:
+  build-pixhawk6c:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 65
+    steps:
+      - name: Checkout repository and ArduPilot
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Verify opt-in HIL protection and quad geometry
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/test_mode29_pair_math.py
+          grep -q 'GSCALAR(m29_balloc_en, "M29_BALLOC", 0)' L1AC_customization/ArduCopter/Parameters.cpp
+          grep -q 'M29_BALLOC requires M29_PAIR_EN=0' L1AC_customization/ArduCopter/mode_adaptive.cpp
+          grep -q 'mode29_bounded_allocate' L1AC_customization/ArduCopter/mode_adaptive.cpp
+
+      - name: Install dependencies and customization
+        shell: bash
+        run: |
+          chmod +x installation.sh
+          ./installation.sh
+
+      - name: Build for Pixhawk 6C Mini
+        shell: bash
+        run: |
+          . ~/.profile
+          cd ardupilot
+          ./waf configure --board Pixhawk6C
+          ./waf copter -j2
+
+      - name: Package HIL-only build and exact revision
+        shell: bash
+        run: |
+          mkdir -p firmware-hil
+          cp ardupilot/build/Pixhawk6C/bin/arducopter.apj firmware-hil/
+          cp ardupilot/build/Pixhawk6C/bin/arducopter.bin firmware-hil/
+          echo "branch=feature/mode29-bounded-hil-20261008" > firmware-hil/BUILD_INFO.txt
+          echo "git_commit=${GITHUB_SHA}" >> firmware-hil/BUILD_INFO.txt
+          echo "M29_BALLOC default=0; M29_PAIR_EN must be 0 with bounded allocator" >> firmware-hil/BUILD_INFO.txt
+          echo "NOT CLEARED FOR PROPELLER-ON FLIGHT; HIL/BENCH ONLY" >> firmware-hil/BUILD_INFO.txt
+          ls -lh firmware-hil/
+
+      - name: Upload compile-verified Pixhawk6C binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: mode29-bounded-hil-only-pixhawk6c-firmware
+          path: firmware-hil/
+          if-no-files-found: error
