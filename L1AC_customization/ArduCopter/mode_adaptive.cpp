@@ -485,6 +485,13 @@ bool ModeAdaptive::init(bool ignore_checks)
     // In HIL mode the bounded pair/retry implementation entirely replaces
     // old instantaneous paired allocation. Both features remain opt-in,
     // disabled by default and not approved for propeller-on operation.
+#if !REAL_OR_SITL
+    if (motor_bounded_enabled_this_run) {
+        GCS_SEND_TEXT(MAV_SEVERITY_CRITICAL,
+                      "Mode29 HIL bounded allocation only supports Softdrone REAL build");
+        return false;
+    }
+#endif
     if (motor_bounded_enabled_this_run && motor_pair_enabled_this_run) {
         GCS_SEND_TEXT(MAV_SEVERITY_WARNING,
                       "Mode29 HIL: progressive bounded-pair experiment only");
@@ -876,6 +883,12 @@ void ModeAdaptive::update_bounded_pair_mode(bool injected_active,
         // Smoothly remove the synthetic mirror, while the injected primary
         // loss is separately released through its controlled HIL ramp.
         withdraw(false);
+        // The opposite synthetic impairment must never persist stronger
+        // than the controlled primary during recovery; otherwise we create
+        // a new one-sided artificial fault at the end of the ramp.
+        motor_pair_loss_pct=MIN(motor_pair_loss_pct,
+                                motor_bounded_injected_loss_pct);
+        motor_pair_active=motor_pair_loss_pct>0.001f;
         motor_pair_retry_pending=false;
         motor_pair_target_loss_pct=0.0f;
         if (!motor_pair_active) {
