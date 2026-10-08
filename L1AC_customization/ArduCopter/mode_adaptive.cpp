@@ -696,6 +696,14 @@ void ModeAdaptive::clear_auto_motor_fault()
     motor_fault_sigma_valid = false;
     mode29_zero(motor_fault_nominal_prev);
     motor_fault_nominal_prev_valid = false;
+    motor_fdi_confirmed_at_ms = 0U;
+    motor_fdi_guarded_cycles = 0U;
+    motor_fdi_raw_innovation_pct = 0.0f;
+    motor_fdi_applied_delta_pct = 0.0f;
+    motor_fdi_excitation_w = 0.0f;
+    motor_fdi_gate_code = 0U;
+    motor_fdi_innovation_sign = 0;
+    motor_fdi_consistent_samples = 0;
 }
 
 
@@ -1219,10 +1227,21 @@ void ModeAdaptive::update_auto_motor_fault_detector(float time_in_this_run)
         motor_fault_sigma_filtered +
         (sigma_now - motor_fault_sigma_filtered) * sigma_alpha;
 
+    if (motor_bounded_enabled_this_run) {
+        motor_fdi_raw_innovation_pct = 0.0f;
+        motor_fdi_applied_delta_pct = 0.0f;
+        motor_fdi_gate_code = 0U;
+        motor_fdi_excitation_w = 0.0f;
+    }
+
     // Opposite-pair disturbances are not observable with the single-fault
     // model below. Hold the previously confirmed isolated motor and loss
     // while intentional mirror derating is enabled.
     if (motor_pair_active) {
+        if (motor_bounded_enabled_this_run) {
+            motor_fdi_gate_code = 9U; // synthetic paired loss, unobservable
+            motor_fdi_guarded_cycles++;
+        }
         return;
     }
     if (motor_bounded_enabled_this_run &&
@@ -1232,6 +1251,8 @@ void ModeAdaptive::update_auto_motor_fault_detector(float time_in_this_run)
         // Bench-injected fault is being smoothly withdrawn; single-motor
         // signature no longer corresponds to constant effectiveness.
         motor_fault_sigma_baseline=motor_fault_sigma_filtered;
+        motor_fdi_gate_code = 9U; // staged release/reanchor
+        motor_fdi_guarded_cycles++;
         return;
     }
 
@@ -1244,6 +1265,9 @@ void ModeAdaptive::update_auto_motor_fault_detector(float time_in_this_run)
         motor_fault_nominal_prev_valid;
 
     if (!detector_gate) {
+        if (motor_bounded_enabled_this_run) {
+            motor_fdi_gate_code=10U; // waiting for valid observer
+        }
         motor_fault_sigma_baseline =
             motor_fault_sigma_baseline +
             (motor_fault_sigma_filtered - motor_fault_sigma_baseline) *
@@ -1317,6 +1341,7 @@ void ModeAdaptive::update_auto_motor_fault_detector(float time_in_this_run)
     if (motor_fault_confirmed) {
         if (motor_bounded_enabled_this_run &&
             motor_bounded_primary_saturated) {
+            motor_fdi_gate_code=2U; // previous step primary saturation
             // Last step could not achieve the requested F/Mx/My. The
             // residual is then NOT an independent motor-loss measurement.
             // Freeze severity, retain motor identity and do not falsely
@@ -1333,23 +1358,36 @@ void ModeAdaptive::update_auto_motor_fault_detector(float time_in_this_run)
         const uint8_t idx = motor_fault_detected_id - 1U;
         const float w =
             constrain_float(motor_fault_nominal_prev[idx], 0.0f, 100.0f);
+        if (motor_bounded_enabled_this_run) {
+            motor_fdi_excitation_w=w;
+        }
         const Vector3f signature = motor_loss_signature(idx, w);
         const float signature_norm_sq = signature * signature;
 
         if (!isfinite(signature_norm_sq) || signature_norm_sq < 1.0e-6f ||
             !isfinite(observed_norm)) {
             motor_fault_recovery_count = 0;
+            if (motor_bounded_enabled_this_run) {
+                motor_fdi_gate_code=3U; // invalid physical observation
+                motor_fdi_guarded_cycles++;
+            }
             return;
         }
 
         const float signed_residual_fraction =
             (observed * signature) / signature_norm_sq;
         if (motor_bounded_enabled_this_run &&
+            isfinite(signed_residual_fraction)) {
+            motor_fdi_raw_innovation_pct=100.0f*signed_residual_fraction;
+        }
+        if (motor_bounded_enabled_this_run &&
             (!isfinite(signed_residual_fraction) ||
              fabsf(signed_residual_fraction) > 1.0f)) {
             // An impossible instantaneous loss must not accumulate toward
             // the 100% saturation latch during aircraft motion.
             motor_fault_recovery_count = 0;
+            motor_fdi_gate_code=3U; // physically impossible innovation
+            motor_fdi_guarded_cycles++;
             return;
         }
         const Vector3f fit_error =
@@ -1360,6 +1398,73 @@ void ModeAdaptive::update_auto_motor_fault_detector(float time_in_this_run)
         motor_fault_residual_ratio =
             isfinite(residual_ratio) ? residual_ratio : 1.0f;
 
+        if (motor_bounded_enabled_this_run) {
+            // The L1 matched-moment signal has its own low-pass dynamics
+            // (~49 ms with sigma_alpha=0.05 at 400Hz). Immediately after
+            // confirming a failure the mixer changes abruptly, but the
+            // residual still contains the *previous* motor command.
+            // Integrating that stale residual was the observed 69% -> 100%
+            // windup in less than 20 ms on Log 67.
+            constexpr uint32_t OBSERVER_SETTLE_MS=125U;
+            if (motor_fdi_confirmed_at_ms == 0U ||
+                AP_HAL::millis()-motor_fdi_confirmed_at_ms <
+                    OBSERVER_SETTLE_MS) {
+                motor_fdi_gate_code=1U;
+                motor_fdi_guarded_cycles++;
+                return;
+            }
+            // Do not divide a noisy moment by a near-zero motor signature.
+            if (w<16.0f) {
+                motor_fdi_gate_code=4U;
+                motor_fdi_guarded_cycles++;
+                return;
+            }
+            // A residual that is poorly aligned with this motor is not
+            // reliable evidence for changing its loss percentage.
+            if (!isfinite(residual_ratio) || residual_ratio>0.35f) {
+                motor_fdi_gate_code=5U;
+                motor_fdi_guarded_cycles++;
+                return;
+            }
+            // Reject very small noisy residuals and require a persistent
+            // innovation direction (6 cycles = 15ms at 400Hz).
+            constexpr float DEADBAND_FRACTION=0.03f;
+            if (fabsf(signed_residual_fraction)<DEADBAND_FRACTION) {
+                motor_fdi_innovation_sign=0;
+                motor_fdi_consistent_samples=0;
+                motor_fdi_gate_code=7U;
+                return;
+            }
+            const int8_t direction =
+                signed_residual_fraction>0.0f ? 1 : -1;
+            if (motor_fdi_innovation_sign!=direction) {
+                motor_fdi_innovation_sign=direction;
+                motor_fdi_consistent_samples=1;
+            } else if (motor_fdi_consistent_samples<6U) {
+                motor_fdi_consistent_samples++;
+            }
+            if (motor_fdi_consistent_samples<6U) {
+                motor_fdi_gate_code=6U;
+                motor_fdi_guarded_cycles++;
+                return;
+            }
+            // Use bounded, confidence-gated integration, not a fixed
+            // 70%-loss cap. True 100% failure remains representable.
+            // Raising severity is deliberately slower than decreasing it
+            // during recovery because upward windup can zero good motors.
+            constexpr float MAX_RISE_PCT_PER_CYCLE=0.075f;  // 30pp/s
+            constexpr float MAX_FALL_PCT_PER_CYCLE=0.25f;  // 100pp/s
+            const float delta_pct=constrain_float(
+                100.0f*0.01f*signed_residual_fraction,
+                -MAX_FALL_PCT_PER_CYCLE,MAX_RISE_PCT_PER_CYCLE);
+            const float old_loss=motor_fault_loss_estimate_pct;
+            motor_fault_loss_estimate_pct=constrain_float(
+                old_loss+delta_pct,0.0f,100.0f);
+            motor_fdi_applied_delta_pct=
+                motor_fault_loss_estimate_pct-old_loss;
+            motor_fdi_gate_code=8U; // accepted bounded update
+        } else {
+        // Legacy behavior remains bit-for-bit functionally unchanged.
         // Only adapt the effectiveness estimate when the residual still looks
         // like the isolated motor's signature.  This prevents unrelated motion
         // or mocap transients from walking the estimate.
@@ -1378,6 +1483,7 @@ void ModeAdaptive::update_auto_motor_fault_detector(float time_in_this_run)
             );
             motor_fault_loss_estimate_pct = 100.0f * loss_fraction;
         }
+        } // legacy FDI path
 
         const float release_loss =
             motor_pair_enabled_this_run ? 0.0f :
@@ -1500,6 +1606,12 @@ void ModeAdaptive::update_auto_motor_fault_detector(float time_in_this_run)
 
     if (motor_fault_confirm_count >= MOTOR_FDI_CONFIRM_SAMPLES) {
         motor_fault_confirmed = true;
+        if (motor_bounded_enabled_this_run) {
+            motor_fdi_confirmed_at_ms=AP_HAL::millis();
+            motor_fdi_gate_code=1U;
+            motor_fdi_innovation_sign=0;
+            motor_fdi_consistent_samples=0;
+        }
         motor_fault_yaw_free_latched = true;
         motor_fault_detected_id = best_motor;
         motor_fault_recovery_count = 0;
@@ -2192,6 +2304,17 @@ void ModeAdaptive::run()
                        (double)(sigma_m_hat_prev[1]),
                        (double)(sigma_m_hat_prev[2]),
                        (double)(sigma_m_hat_prev[3]));
+
+    AP::logger().Write("L1FI",
+                       "raw,step,ratio,w,gate,held,est",
+                       "ffffBIf",
+                       (double)motor_fdi_raw_innovation_pct,
+                       (double)motor_fdi_applied_delta_pct,
+                       (double)motor_fault_residual_ratio,
+                       (double)motor_fdi_excitation_w,
+                       (uint8_t)motor_fdi_gate_code,
+                       (uint32_t)motor_fdi_guarded_cycles,
+                       (double)motor_fault_loss_estimate_pct);
 
     AP::logger().Write("L1BA", "ena,sat,Freq,Fpred,Er,Ep,Freeze",
                        "BBffffI",
