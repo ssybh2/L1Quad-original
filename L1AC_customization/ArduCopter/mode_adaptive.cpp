@@ -976,7 +976,12 @@ void ModeAdaptive::update_bounded_pair_mode(bool injected_active,
         motor_pair_feasible_since_ms=now;
     }
     if (now-motor_pair_feasible_since_ms<hold_ms) {
-        withdraw(false);
+        // Important: DO NOT clear feasible_since while waiting. Otherwise
+        // every 400-Hz tick restarts the 150-ms hold and mirroring never
+        // enters, even when the wrench stays feasible continuously.
+        motor_pair_loss_pct=MAX(0.0f,
+            motor_pair_loss_pct-ramp_pp_s*step);
+        motor_pair_active=motor_pair_loss_pct>0.001f;
         return;
     }
 
