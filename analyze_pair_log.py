@@ -65,6 +65,35 @@ def main():
     else:
         print("Opposite pair never engaged (check FDI estimate/threshold/guard)")
 
+    if injected:
+        confirmed_injected = [r for r in injected if number(r, "fdi_state", 0) == 2]
+        retry = [r for r in injected if number(r, "pair_retry_pending", 0) > 0.5]
+        if confirmed_injected:
+            estimates = [number(r, "fdi_loss_estimate_pct") for r in confirmed_injected]
+            last = confirmed_injected[-1]
+            print("Confirmed FDI severity at start/end: {:.2f}% / {:.2f}%".format(
+                estimates[0], estimates[-1]))
+            print("Confirmed FDI severity range: {:.2f}..{:.2f}%".format(
+                min(estimates), max(estimates)))
+        if retry:
+            causes = {}
+            for r in retry:
+                reason = r.get("pair_transient_reason", "")
+                causes[reason] = causes.get(reason, 0) + 1
+            print("Pair severity retry samples:", len(retry))
+            print("Pair transient reasons:", causes)
+            print("Retry final time: {:.3f}s".format(number(retry[-1], "t")))
+        cool = [r for r in rows if number(r, "fdi_cooldown_remaining_s", 0) > 0]
+        if cool:
+            print("FDI recovery cooldown observed {:.3f}s..{:.3f}s".format(
+                number(cool[0], "t"), number(cool[-1], "t")))
+        recovery_confirmed = [
+            r for r in rows
+            if number(r, "t") > number(injected[-1], "t") + 0.01
+            and number(r, "fdi_state", 0) == 2
+        ]
+        print("Post-injection erroneous FDI-confirmed samples:", len(recovery_confirmed))
+
     stopped = [r for r in rows if r.get("pair_guard_reason")]
     if stopped:
         print(f"Pair disengagement reason: {stopped[-1]['pair_guard_reason']}")
