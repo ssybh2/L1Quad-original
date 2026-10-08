@@ -1458,7 +1458,7 @@ def run(cfg):
         "F_actual_N","Mx_actual_Nm","My_actual_Nm","Mz_actual_Nm",
         "tilt_limiter","allocator_mode","yaw_free_active","candidate_protection_active",
         "fault_active","fault_motor","fault_loss_pct","fault_effectiveness",
-        "pair_enabled","pair_active","pair_inhibited","pair_failed_motor",
+        "pair_enabled","pair_source","pair_active","pair_inhibited","pair_failed_motor",
         "pair_opposite_motor","pair_loss_estimate_pct","pair_static_margin",
         "pair_estimate_bias_pp","pair_xy_error_m","pair_z_error_m",
         "fdi_state","fdi_motor","fdi_candidate","fdi_confirm_count","fdi_recovery_count",
@@ -1492,7 +1492,7 @@ def run(cfg):
             f"{fault.start_time:.2f}s..{fault_end}, blind={fault.blind_fdi}"
         )
     print(f"blind FDI        : {'ON' if detector.enabled else 'OFF'}")
-    print(f"opposite pair    : {'ENABLED (research)' if pair.enabled else 'OFF / original mode'}")
+    print(f"opposite pair    : {('ENABLED source='+pair.source) if pair.enabled else 'OFF / original mode'}")
     if detector.yaw_rate_safety_limit_enabled:
         print(f"yaw-rate safety  : +/-{detector.yaw_rate_safety_limit:.3f} rad/s (yaw-free only)")
     else:
@@ -1537,11 +1537,17 @@ def run(cfg):
 
                 # FDI is blind to the injector: it only consumes measured body
                 # rates plus the previous desired moment/nominal motor command.
-                detector.update(
-                    data.time,
-                    meas_Omega,
-                    freeze_confirmed_estimate=yaw_rate_limiter_active or pair.active,
-                )
+                if pair.active and pair.source == "oracle":
+                    # Freeze blind detector in the *oracle* comparison to avoid
+                    # interpreting the deliberate second fault as one-motor FDI.
+                    # Preserve a fresh gyro baseline for a later disengagement.
+                    detector.prev_omega = np.asarray(meas_Omega, dtype=float).copy()
+                else:
+                    detector.update(
+                        data.time,
+                        meas_Omega,
+                        freeze_confirmed_estimate=yaw_rate_limiter_active or pair.active,
+                    )
                 fault_active_now = fault.is_active(data.time)
                 pair.update(
                     data.time, meas_pos, meas_Omega,
@@ -1578,7 +1584,7 @@ def run(cfg):
 
                 yaw_free_active = detector.yaw_free_latched or candidate_protection_active or (
                     fault_active_now and fault.request_yaw_free and not fault.blind_fdi
-                )
+                ) or pair.active or (pair.enabled and pair.activated_at_s is not None)
 
                 ref = trajectory_at(data.time, float(traj["takeoff_altitude_m"]), float(traj["takeoff_time_s"]))
                 if yaw_free_active:
@@ -1760,6 +1766,7 @@ def run(cfg):
                     "fault_loss_pct":fault.loss_percent if fault_active else 0.0,
                     "fault_effectiveness":fault_effectiveness,
                     "pair_enabled":int(pair.enabled),
+                    "pair_source":pair.source if pair.enabled else "off",
                     "pair_active":int(pair.active),
                     "pair_inhibited":int(pair.inhibited),
                     "pair_failed_motor":pair.failed_motor_id,
@@ -1857,6 +1864,7 @@ def run(cfg):
     print(f"FDI confirmed at : {detector.confirmed_at_s if detector.confirmed_at_s is not None else 'not detected'}")
     print(f"FDI recovered at : {detector.recovered_at_s if detector.recovered_at_s is not None else 'not recovered'}")
     print(f"yaw-free latched : {detector.yaw_free_latched}")
+    print(f"pair source      : {pair.source}")
     print(f"pair engaged at  : {pair.activated_at_s if pair.activated_at_s is not None else 'never'}")
     print(f"pair active/lock : {pair.active}/{pair.inhibited}")
     print(f"pair reason      : {pair.reason or '-'}")
@@ -1871,6 +1879,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default="config.toml")
     ap.add_argument("--headless", action="store_true", help="disable MuJoCo viewer")
+    ap.add_argument("--pair-oracle", action="store_true",
+                    help="SIMULATION ONLY: use injected fault truth for paired control benchmark")
     ap.add_argument("--no-realtime", action="store_true", help="run as fast as possible")
     ap.add_argument("--duration", type=float, help="override simulation duration in seconds")
     l1_group = ap.add_mutually_exclusive_group()
@@ -1896,6 +1906,9 @@ def main():
     args = ap.parse_args()
     with open(args.config, "rb") as f:
         cfg = tomllib.load(f)
+    if args.pair_oracle:
+        cfg.setdefault("opposite_pair", {})["enabled"] = True
+        cfg["opposite_pair"]["source"] = "oracle"
     if args.headless:
         cfg["simulation"]["viewer"] = False
     if args.no_realtime:
