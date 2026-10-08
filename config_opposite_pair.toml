@@ -279,6 +279,9 @@ feasible_hold_s = 0.15
 mirror_ramp_rate_pp_s = 70.0
 # Require this many Newtons headroom on each rotor in feasibility checks.
 minimum_primary_reserve_n = 0.0
+# Prioritize XYZ position / F/Mx/My over fast yaw: reduce the configured
+# self-spin target to at most this fraction. 1.0 allows full requested speed.
+max_position_yaw_scale = 0.65
 min_static_thrust_margin = 1.5
 max_body_yaw_rate_rps = 4.0
 max_xy_error_m = 0.5
