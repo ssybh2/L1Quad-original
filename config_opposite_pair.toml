@@ -251,7 +251,8 @@ max_yaw_rate_deg_s = 180.0
 [yaw_rate_schedule]
 enabled = true
 loss_nodes_percent = [0,10,20,30,40,50,60,70,80,90,100]
-brake_start_fraction = 0.75
+target_spin_fraction = 0.65  # target yaw rate = fraction * loss-specific max rate
+brake_start_fraction = 0.75  # extra early braking begins here
 rate_gain_nm_per_rps = 0.08
 max_corrective_moment_nm = 0.20
 hard_abort_multiplier = 1.6
