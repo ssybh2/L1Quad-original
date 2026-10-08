@@ -482,12 +482,12 @@ bool ModeAdaptive::init(bool ignore_checks)
     motor_bounded_yaw_min_nm = 0.0f;
     motor_bounded_yaw_max_nm = 0.0f;
     motor_bounded_yaw_unbrakeable = false;
-    // Pairing's old instantaneous second-fault path has NOT been verified
-    // with the new allocator. Refuse the combined experiment in HIL build.
+    // In HIL mode the bounded pair/retry implementation entirely replaces
+    // old instantaneous paired allocation. Both features remain opt-in,
+    // disabled by default and not approved for propeller-on operation.
     if (motor_bounded_enabled_this_run && motor_pair_enabled_this_run) {
-        GCS_SEND_TEXT(MAV_SEVERITY_CRITICAL,
-                      "Mode29 HIL: M29_BALLOC requires M29_PAIR_EN=0");
-        return false;
+        GCS_SEND_TEXT(MAV_SEVERITY_WARNING,
+                      "Mode29 HIL: progressive bounded-pair experiment only");
     }
 
     if (!ahrs.have_inertial_nav()) {
@@ -1800,11 +1800,37 @@ void ModeAdaptive::run()
         motor_degradation_loss_pct > 0.0f &&
         motor_degradation_command_fresh(motor_deg_now_ms);
 
-    // Blind FDI uses the previous cycle's L1 matched-moment estimate and
-    // nominal actuator commands. A confirmed severe fault automatically
-    // releases yaw even when the injector itself requested keep-yaw.
+    // HIL-only synchronized release of the intentionally injected
+    // effectiveness impairment. Do not transfer this "known injection"
+    // handover to a spontaneous real motor recovery: in that case the
+    // actual actuator effectiveness is not independently measured.
+    if (motor_bounded_enabled_this_run) {
+        if (motor_degradation_active) {
+            motor_bounded_injected_motor_id=motor_degradation_motor_id;
+            motor_bounded_injected_loss_pct=motor_degradation_loss_pct;
+            motor_bounded_recovery_active=false;
+        } else if (motor_bounded_injected_loss_pct>0.001f) {
+            motor_bounded_recovery_active=true;
+            // Reduce injector and allocator compensation together, rather
+            // than removing a 90%-scale impairment in one 2.5ms tick.
+            motor_bounded_injected_loss_pct=MAX(
+                0.0f, motor_bounded_injected_loss_pct-100.0f*0.0025f);
+            if (motor_bounded_injected_loss_pct<=0.001f) {
+                motor_bounded_injected_loss_pct=0.0f;
+                motor_bounded_recovery_active=false;
+                const bool hold_yaw_free=motor_fault_yaw_free_latched;
+                clear_auto_motor_fault();
+                motor_fault_yaw_free_latched=hold_yaw_free;
+                motor_bounded_recovery_cooldown_until_ms=
+                    motor_deg_now_ms+2000U;
+            }
+        }
+    }
+    // Blind FDI uses previous L1 estimates, not injected truth.
     update_auto_motor_fault_detector(timeInThisRun);
-    update_motor_pair_mode(motor_degradation_active);
+    if (!motor_bounded_enabled_this_run) {
+        update_motor_pair_mode(motor_degradation_active);
+    }
     update_gain_schedule(motor_degradation_active);
 
     AP::logger().Write("L1GS",
@@ -1834,7 +1860,8 @@ void ModeAdaptive::run()
 
     const bool yaw_free_active =
         motor_fault_yaw_free_latched ||
-        (motor_degradation_active && motor_degradation_yaw_free);
+        (motor_degradation_active && motor_degradation_yaw_free) ||
+        (motor_bounded_enabled_this_run && motor_bounded_recovery_active);
 
     if (yaw_free_active) {
         // Keep estimating yaw, but stop asking the aircraft to return to a
