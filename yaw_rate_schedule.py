@@ -52,7 +52,7 @@ class YawRateEnvelope:
             raise ValueError("spin_direction must be +1 or -1")
         return direction * math.radians(self.limit_deg_s(loss_percent)) * self.target_spin_fraction
 
-    def requested_moment(self, loss_percent, measured_body_yaw_rate_rps, spin_direction=1):
+    def requested_moment(self, loss_percent, measured_body_yaw_rate_rps, spin_direction=1, target_scale=1.0):
         """Rotor reaction-torque P feedback, preserving untracked yaw heading.
 
         Below the setpoint: drive the aircraft to spin; above: brake.
@@ -64,7 +64,13 @@ class YawRateEnvelope:
             raise ValueError("non-finite gyro yaw rate")
         if not self.enabled:
             return 0.0
-        target = self.target_rate_rps(loss_percent, spin_direction)
+        # Slow or stop commanded spin when position or thrust authority is
+        # constrained. Braking of existing spin remains available.
+        if not math.isfinite(target_scale):
+            raise ValueError("target_scale must be finite")
+        target = self.target_rate_rps(loss_percent, spin_direction) * float(
+            np.clip(target_scale, 0.0, 1.0)
+        )
         cap = math.radians(self.limit_deg_s(loss_percent))
         requested = self.gain * (target - rate)
         if abs(rate) > self.brake_start * cap:
