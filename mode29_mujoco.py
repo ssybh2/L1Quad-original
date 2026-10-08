@@ -1523,6 +1523,7 @@ def run(cfg):
     max_err = 0.0
     max_tilt = 0.0
     divergence_since_s = None
+    fault_has_occurred = False
     divergence_limit_m = float(cfg.get("safety", {}).get(
         "position_divergence_abort_m", float("inf")
     ))
@@ -1979,13 +1980,14 @@ def run(cfg):
                 # Controlled termination is safer than continuing a
                 # physically unreachable wrench until MuJoCo flies meters
                 # away. Applies to ANY nonzero motor fault fraction.
-                if fault_active and err > divergence_limit_m:
+                fault_has_occurred = fault_has_occurred or bool(fault_active)
+                if fault_has_occurred and err > divergence_limit_m:
                     if divergence_since_s is None:
                         divergence_since_s = float(data.time)
                     if data.time-divergence_since_s >= divergence_hold_s:
                         aborted = True
                         reason = (
-                            f"controlled safety stop: faulted position error "
+                            f"controlled safety stop: fault/recovery position error "
                             f"{err:.3f}m exceeded {divergence_limit_m:.3f}m "
                             f"for {divergence_hold_s:.3f}s; actual allocator "
                             f"feasibility={allocator_diag.get('primary_feasible', 'unknown')}"
