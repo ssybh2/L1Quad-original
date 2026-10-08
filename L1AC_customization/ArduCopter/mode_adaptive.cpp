@@ -145,6 +145,8 @@ struct Mode29BoundedDiag {
     float predicted_f = 0.0f;
     float roll_error = 0.0f;
     float pitch_error = 0.0f;
+    float yaw_min_nm = 0.0f;
+    float yaw_max_nm = 0.0f;
 };
 
 #if REAL_OR_SITL
@@ -389,6 +391,8 @@ bool mode29_bounded_allocate(const VectorN<float, 4> &desired,
     };
     if (lo>hi) { lo=hi=0.5f*(lo+hi); }
     const float yaw_a=yaw_at(lo),yaw_b=yaw_at(hi);
+    diag.yaw_min_nm=MIN(yaw_a,yaw_b);
+    diag.yaw_max_nm=MAX(yaw_a,yaw_b);
     const float yaw_req=constrain_float(desired[3],MIN(yaw_a,yaw_b),
                                          MAX(yaw_a,yaw_b));
     // Linear interpolation is bounded, deterministic and low-cost; it is
@@ -471,6 +475,13 @@ bool ModeAdaptive::init(bool ignore_checks)
     motor_bounded_roll_error_nm = 0.0f;
     motor_bounded_pitch_error_nm = 0.0f;
     motor_bounded_fdi_freeze_samples = 0U;
+    motor_bounded_injected_loss_pct = 0.0f;
+    motor_bounded_injected_motor_id = 0U;
+    motor_bounded_recovery_active = false;
+    motor_bounded_recovery_cooldown_until_ms = 0U;
+    motor_bounded_yaw_min_nm = 0.0f;
+    motor_bounded_yaw_max_nm = 0.0f;
+    motor_bounded_yaw_unbrakeable = false;
     // Pairing's old instantaneous second-fault path has NOT been verified
     // with the new allocator. Refuse the combined experiment in HIL build.
     if (motor_bounded_enabled_this_run && motor_pair_enabled_this_run) {
@@ -688,6 +699,11 @@ void ModeAdaptive::reset_motor_pair_mode()
     motor_pair_opposite_id = 0;
     motor_pair_loss_pct = 0.0f;
     motor_pair_capacity_ratio = 0.0f;
+    motor_pair_retry_after_ms=0U;
+    motor_pair_feasible_since_ms=0U;
+    motor_pair_retry_count=0U;
+    motor_pair_retry_pending=false;
+    motor_pair_target_loss_pct=0.0f;
 }
 
 void ModeAdaptive::update_motor_pair_mode(bool motor_degradation_active)
@@ -1187,6 +1203,15 @@ void ModeAdaptive::update_auto_motor_fault_detector(float time_in_this_run)
     // model below. Hold the previously confirmed isolated motor and loss
     // while intentional mirror derating is enabled.
     if (motor_pair_active) {
+        return;
+    }
+    if (motor_bounded_enabled_this_run &&
+        (motor_bounded_recovery_active ||
+         (motor_bounded_recovery_cooldown_until_ms != 0U &&
+          (int32_t)(AP_HAL::millis()-motor_bounded_recovery_cooldown_until_ms)<0))) {
+        // Bench-injected fault is being smoothly withdrawn; single-motor
+        // signature no longer corresponds to constant effectiveness.
+        motor_fault_sigma_baseline=motor_fault_sigma_filtered;
         return;
     }
 
