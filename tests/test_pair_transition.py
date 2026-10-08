@@ -53,17 +53,21 @@ class RecoveryTest(unittest.TestCase):
         self.assertFalse(at_full["feasible"])
         pair.plan_mirror(5.2, .0025, severe, ToyMixer())
         self.assertEqual(pair.mirror_loss_percent, 0.)
-        self.assertFalse(pair.feasible_stable)
+        self.assertFalse(pair.active)
+        self.assertTrue(pair.retry_pending)
+        self.assertFalse(pair.inhibited, "one impossible moment request cannot permanently latch")
 
         mild = [10.29, -.083, .007, 0.]
         self.assertTrue(paired_primary_feasibility(ToyMixer(), mild, 1, 84., 84.)["feasible"])
-        pair.plan_mirror(5.3, .0025, mild, ToyMixer())
+        pair.update(5.55, [0., 0., -1.], [0., 0., 0.], 1., True, fault, fdi)
+        self.assertTrue(pair.active, "re-enter after transient with previously confirmed FDI")
+        pair.plan_mirror(5.55, .0025, mild, ToyMixer())
         self.assertEqual(pair.mirror_loss_percent, 0.)
-        pair.plan_mirror(5.47, .0025, mild, ToyMixer())
+        pair.plan_mirror(5.72, .0025, mild, ToyMixer())
         self.assertGreater(pair.mirror_loss_percent, 0.)
         self.assertLess(pair.mirror_loss_percent, 84.)
         old = pair.mirror_loss_percent
-        pair.plan_mirror(5.4725, .0025, mild, ToyMixer())
+        pair.plan_mirror(5.7225, .0025, mild, ToyMixer())
         self.assertGreater(pair.mirror_loss_percent, old)
 
     def test_transient_fallback_retries_without_permanent_lock(self):
