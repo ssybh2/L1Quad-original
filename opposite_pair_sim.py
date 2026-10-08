@@ -102,9 +102,10 @@ class OppositePairExperiment:
         self.reason = ""
         self.activated_at_s = None
         self.disengaged_at_s = None
+        self.yaw_abort_limit_rps = self.max_spin
 
     def update(self, t, measured_pos, measured_omega, target_altitude,
-               original_fault_active, injector, detector):
+               original_fault_active, injector, detector, yaw_envelope=None):
         if not self.enabled:
             return
         pos = np.asarray(measured_pos, dtype=float)
@@ -113,8 +114,18 @@ class OppositePairExperiment:
         xy_error = float(np.linalg.norm(pos[:2])) if finite else float("inf")
         z_error = abs(float(pos[2]) + float(target_altitude)) if finite else float("inf")
         yaw_rate = abs(float(omega[2])) if finite else float("inf")
+        # Physical yaw-rate ceiling is loss-dependent in paired experiments.
+        # No simulator gyro clipping. A separate harder abort handles lack
+        # of torque authority or excessive transients.
+        chosen_loss = (self.estimated_loss_percent if self.active else
+                       (injector.loss_percent if self.source == "oracle" else
+                        float(detector.loss_estimate_percent)))
+        yaw_abort = (yaw_envelope.abort_limit_rps(chosen_loss)
+                     if yaw_envelope is not None and yaw_envelope.enabled
+                     else self.max_spin)
+        self.yaw_abort_limit_rps = yaw_abort
         guard = (not finite or xy_error > self.max_xy or z_error > self.max_z or
-                 yaw_rate > self.max_spin)
+                 yaw_rate > yaw_abort)
 
         if self.active:
             if guard or not original_fault_active or (self.source == "fdi" and not detector.confirmed):
@@ -131,8 +142,8 @@ class OppositePairExperiment:
                     self.reason = f"XY error {xy_error:.3f} m > {self.max_xy:.3f} m"
                 elif z_error > self.max_z:
                     self.reason = f"height error {z_error:.3f} m > {self.max_z:.3f} m"
-                elif yaw_rate > self.max_spin:
-                    self.reason = f"yaw rate {yaw_rate:.3f} rad/s > {self.max_spin:.3f} rad/s"
+                elif yaw_rate > yaw_abort:
+                    self.reason = f"yaw rate {yaw_rate:.3f} rad/s > hard abort {yaw_abort:.3f} rad/s"
                 else:
                     self.reason = "unknown paired-fault disengagement"
             return
@@ -156,7 +167,7 @@ class OppositePairExperiment:
             loss = float(detector.loss_estimate_percent)
             if not np.isfinite(loss) or not np.isfinite(detector.residual_ratio):
                 return
-            if loss < 60.0 or detector.residual_ratio > 0.35:
+            if loss <= 0.0 or detector.residual_ratio > 0.35:
                 return
         if not (0.0 <= loss <= 100.0) or not (0.0 <= injector.loss_percent <= 100.0):
             self.inhibited = True
