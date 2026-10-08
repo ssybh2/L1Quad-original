@@ -9,10 +9,20 @@ import numpy as np
 
 
 class YawRateEnvelope:
-    def __init__(self, cfg):
+    def __init__(self, cfg, gain_schedule=None):
         self.enabled = bool(cfg.get("enabled", False))
         self.nodes = np.asarray(cfg.get("loss_nodes_percent", list(range(0, 101, 10))), dtype=float)
-        self.limits = np.asarray(cfg.get("max_yaw_rate_deg_s", [180.0] * 11), dtype=float)
+        # Each 10%-step gain anchor can own its yaw limit in the SAME
+        # independently editable TOML block as kp,kv,kr,ko,max_tilt_deg.
+        # The legacy global array remains a fallback for older configs.
+        fallback = np.asarray(cfg.get("max_yaw_rate_deg_s", [180.0]*11), dtype=float)
+        if fallback.shape != (11,):
+            raise ValueError("yaw_rate_schedule.max_yaw_rate_deg_s must have 11 entries")
+        anchors = gain_schedule or {}
+        self.limits = np.asarray([
+            float(anchors.get(f"loss_{int(loss)}", {}).get("max_yaw_rate_deg_s", fallback[i]))
+            for i, loss in enumerate(self.nodes)
+        ], dtype=float)
         self.brake_start = float(cfg.get("brake_start_fraction", 0.75))
         self.gain = float(cfg.get("rate_gain_nm_per_rps", 0.08))
         self.max_moment = float(cfg.get("max_corrective_moment_nm", 0.20))
