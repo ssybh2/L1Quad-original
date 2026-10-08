@@ -47,9 +47,14 @@ repeatable **controller tuning** against a known injection. Later use
 different setting from `-Oracle` which uses ground truth to engage
 the opposite-pair mechanism for simulation-only diagnosis.
 
-The `[yaw_rate_schedule]` section tunes anticipatory rotor-torque braking:
-`brake_start_fraction`, `rate_gain_nm_per_rps`,
-`max_corrective_moment_nm`, and `hard_abort_multiplier`.
+The `[yaw_rate_schedule]` section tunes **nonzero spin target**
+and anticipatory rotor-torque braking:
+`target_spin_fraction`, `brake_start_fraction`,
+`rate_gain_nm_per_rps`, `max_corrective_moment_nm`, and
+`hard_abort_multiplier`. Example: at loss 90%, choose a ceiling of
+180 deg/s and `target_spin_fraction=0.65` to **command about 117 deg/s
+self-spin** (not a fixed heading). A larger rate drives accelerating motor
+yaw torque, and overspeed drives braking torque *when available*.
 Soft speed ceilings do **not guarantee** rate below the limit if motors
 saturate or there is insufficient yaw torque authority. The allocator
 preserves requested total thrust/Roll/Pitch where feasible before using
