@@ -1461,6 +1461,7 @@ def run(cfg):
         "pair_enabled","pair_source","pair_active","pair_inhibited","pair_failed_motor",
         "pair_opposite_motor","pair_loss_estimate_pct","pair_static_margin",
         "pair_estimate_bias_pp","pair_xy_error_m","pair_z_error_m",
+        "pair_disengaged_time_s","pair_guard_reason",
         "fdi_state","fdi_motor","fdi_candidate","fdi_confirm_count","fdi_recovery_count",
         "fdi_loss_estimate_pct","fdi_residual_ratio","fdi_sigma_mx","fdi_sigma_my","fdi_sigma_mz",
         "schedule_mode","schedule_raw_loss_pct","schedule_loss_pct","schedule_confidence",
@@ -1779,6 +1780,10 @@ def run(cfg):
                     ),
                     "pair_xy_error_m":float(np.linalg.norm(meas_pos[:2])),
                     "pair_z_error_m":abs(float(meas_pos[2]+traj["takeoff_altitude_m"])),
+                    "pair_disengaged_time_s":(
+                        pair.disengaged_at_s if pair.disengaged_at_s is not None else ""
+                    ),
+                    "pair_guard_reason":pair.reason,
                     "fdi_state":detector.state,
                     "fdi_motor":detector.detected_id,
                     "fdi_candidate":detector.candidate_id,
@@ -1867,6 +1872,7 @@ def run(cfg):
     print(f"pair source      : {pair.source}")
     print(f"pair engaged at  : {pair.activated_at_s if pair.activated_at_s is not None else 'never'}")
     print(f"pair active/lock : {pair.active}/{pair.inhibited}")
+    print(f"pair stopped at  : {pair.disengaged_at_s if pair.disengaged_at_s is not None else '-'}")
     print(f"pair reason      : {pair.reason or '-'}")
     print(f"CSV              : {log_path}")
     print("="*72)
