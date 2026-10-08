@@ -187,6 +187,19 @@ max_tilt_deg = 30.0
 
 # Observer-confirmed diagonal rotor matching is deliberately opt-in.
 # Keep this base configuration unchanged for single-motor FDI comparison.
+# 10%-step editable speed envelope. Example INITIAL values, not tuned.
+# Values correspond to loss=[0,10,20,30,40,50,60,70,80,90,100] percent.
+# Intermediate fault percentages use LINEAR interpolation.
+# This is physical rotor moment feedback; NO manual clipping of gyro state.
+[yaw_rate_schedule]
+enabled = false
+loss_nodes_percent = [0,10,20,30,40,50,60,70,80,90,100]
+max_yaw_rate_deg_s = [180,180,180,180,180,180,180,180,180,180,180]
+brake_start_fraction = 0.75
+rate_gain_nm_per_rps = 0.08
+max_corrective_moment_nm = 0.20
+hard_abort_multiplier = 1.6
+
 [opposite_pair]
 enabled = false
 source = "fdi"
