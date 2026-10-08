@@ -43,16 +43,19 @@ class PairedLossModelTests(unittest.TestCase):
                          [2, 1, 4, 3])
 
     def test_pair_equal_percentage_gives_zero_roll_pitch_at_equal_commands(self):
-        for damaged in range(1, 5):
-            eta = [1.0] * 4
-            eta[damaged - 1] = 0.4
-            eta[opposite_motor(damaged) - 1] = 0.4
-            # Input commands equal here; this checks geometry, not flight trim.
-            applied = [v * 5.0 for v in eta]
-            force, mx, my = wrench_from_forces(applied)
-            self.assertAlmostEqual(mx, 0.0, places=10)
-            self.assertAlmostEqual(my, 0.0, places=10)
-            self.assertGreater(force, 0)
+        # Any exact loss percentage is a valid model input. 100% is rank
+        # deficient for three-axis allocation but equal losses still cancel
+        # roll/pitch under symmetric equal motor commands.
+        for loss in (0, 0.1, 5, 23.7, 40, 50, 60, 75, 82.5, 90, 99.5, 100):
+            for damaged in range(1, 5):
+                eta = [1.0] * 4
+                eta[damaged - 1] = 1.0 - loss / 100.0
+                eta[opposite_motor(damaged) - 1] = eta[damaged - 1]
+                applied = [v * 5.0 for v in eta]
+                force, mx, my = wrench_from_forces(applied)
+                self.assertAlmostEqual(mx, 0.0, places=10)
+                self.assertAlmostEqual(my, 0.0, places=10)
+                self.assertGreater(force, 0)
 
     def test_yaw_torque_imbalance_has_a_consistent_sign(self):
         # Motor 1+2 are CCW and 3+4 are CW. Their reaction moment
@@ -69,12 +72,13 @@ class PairedLossModelTests(unittest.TestCase):
             self.assertAlmostEqual(gram_determinant(eta), 0.0, places=10)
 
     def test_partial_pair_keeps_full_linearized_rank(self):
-        for bad in (1, 2, 3, 4):
-            eta = [1.0] * 4
-            eta[bad - 1] = eta[opposite_motor(bad) - 1] = 0.4
-            self.assertGreater(gram_determinant(eta), 1.0e-10)
+        for loss in (0, 1, 10, 30, 60, 75, 90, 99):
+            for bad in (1, 2, 3, 4):
+                eta = [1.0] * 4
+                eta[bad - 1] = eta[opposite_motor(bad) - 1] = 1-loss/100
+                self.assertGreater(gram_determinant(eta), 1.0e-12)
 
-    def test_model_thrust_margin_at_60_percent_loss(self):
+    def test_model_thrust_margin_at_example_partial_loss(self):
         # 2026-10-06 6S cubic, using the thrust-stand-validated range.
         w = 80.0
         x = max(0.0, w - 4.47703190)
