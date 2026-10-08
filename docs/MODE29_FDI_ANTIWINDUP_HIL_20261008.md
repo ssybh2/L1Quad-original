@@ -1,6 +1,7 @@
 # Mode29 HIL-only FDI confirmed-severity anti-windup — 2026-10-08
 
-This change lives ONLY in `feature/mode29-fdi-antiwindup-hil-20261008`.
+The initial 2026-10-08 change lives in `feature/mode29-fdi-antiwindup-hil-20261008`.
+Its 2026-10-08 follow-up lives in `feature/mode29-fdi-robust-hil-20261008`.
 It branches from successful `f31362c` bounded-HIL firmware. It is
 **not flight qualified**, especially for motor-fault experiments with
 propellers attached. Do not promote to flight without new closed-loop
@@ -77,3 +78,72 @@ test pairing (M29_PAIR_EN=1) on an unpowered HIL setup.
 
 Strict full closed-loop acceptance is NOT implied by compiling; the
 previous MuJoCo 80/90% recovery runs remain unqualified.
+
+## HIL robustness follow-up — transition validity + weaker faults
+
+The follow-up adds only opt-in HIL changes guarded by `M29_BALLOC=1`.
+The original behavior with `M29_BALLOC=0` remains unchanged.
+
+### Stale-residual handling after *any* modeled allocation transition
+
+- In addition to the initial 125 ms post-confirmation wait, the FDI observer
+  validity window is now reset on each primary-wrench saturation tick, while
+  a synthetic opposite-pair fault is active, or during staged injection release.
+- A commanded output jump >=12 on the currently detected motor's 0..100
+  nominal-command scale also invalidates the prior matched-moment residual.
+- Six signed-innovation samples are required **after** the settling window
+  before any severity update is accepted. Repeated command jumps can keep
+  the estimator frozen rather than force an unreliable effectiveness estimate.
+- On confirmed recovery, timing, hysteresis and saturation-streak state are
+  reset so stale state cannot carry forward into the next detection.
+
+### Sustained saturation is an observability failure, not proof of total loss
+
+- No path maps a saturated allocator directly to 100% failure.
+- At >=200 consecutive saturated 400-Hz ticks (0.5 seconds), `L1FI.gate=11`
+  signals **prolonged unobservable FDI**; `L1FI.stall` reports the running
+  consecutive saturation samples. Gate 2 identifies shorter saturation.
+- A telemetry warning is sent on reaching 200 ticks and then every 400
+  saturated ticks (while the cap of 60000 ticks is not reached).
+- The observer waits 125 ms after saturation clears before updating
+  effectiveness. The allocator can remain physically infeasible meanwhile.
+  **Do not interpret a held 70% estimate as actual 70% failure**.
+- A correctly classified 100% failure still requires a measurable residual
+  and a physically feasible command during parts of the test. We make no
+  promise of identifying full failure under permanent saturation.
+
+### Sensitivity study for less severe faults
+
+- Under `M29_BALLOC=1`, `M29_PAIR_EN=0`: experimental confirmation
+  threshold is 15% (strictly above), and minimum roll/pitch residual is
+  0.10 Nm, versus legacy 60% and 0.20 Nm.
+- For estimated severity <60%, a candidate requires 40 consecutive samples
+  (~100 ms), residual fit <=0.25, and nominal excitation >=16.
+  At >=60%, retain 24 samples and <=0.35 fit from the earlier baseline.
+- Under `M29_PAIR_EN=1`, the existing zero-minimum candidate configuration
+  still requires signal evidence and the other gates.
+- These are **unvalidated experimental thresholds**. Detection below 15%
+  is not claimed. No nonzero loss is always detectable: weak faults may be
+  indistinguishable from sensor noise, unmodeled dynamics and disturbances.
+- Assess false positives at zero fault, 10%, 15%, 20%, 30%, 40%, 50% before
+  judging the change useful. A detection curve, rather than one success,
+  is required.
+
+### L1FI telemetry schema change
+
+`L1FI` now has fields
+`raw,step,ratio,w,gate,held,stall,est` (format `ffffBIIf`).
+`stall` is a consecutive saturation count (not elapsed seconds);
+`held` is the existing cumulative blocked-estimator count.
+Gate 12 means a nominal-command jump triggered a new settle interval,
+and gate 11 means prolonged saturation. A gate 1 indicates ordinary
+observer settling. Use exact build SHA when comparing log schemas.
+
+### Tests and safety
+
+`tests/test_fdi_hil_antiwindup.py` now also checks re-settling after
+saturation, synthetic-pair withdrawal and sudden command steps, plus the
+new opt-in candidate persistence/fit/excitation gates.
+These Python tests remain simplified **offline contract and arithmetic**
+checks, not flight-qualified actuator or closed-loop validation.
+Perform no-propeller bench/HIL tests before considering any real flight.
