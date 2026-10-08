@@ -182,11 +182,17 @@ class OppositePairExperiment:
             loss = float(detector.loss_estimate_percent)
             if not np.isfinite(loss) or not np.isfinite(detector.residual_ratio):
                 return
-            if loss <= 0.0 or detector.residual_ratio > 0.35:
+            # The ongoing residual is a *post-compensation innovation*.
+            # Near convergence its norm approaches sensor noise, so its
+            # normalized fit ratio becomes meaningless for motor identity.
+            # Gate identity by the residual stored AT FDI confirmation.
+            identity_fit = float(getattr(detector, "identity_fit_ratio",
+                                         detector.residual_ratio))
+            if loss <= 0.0 or not np.isfinite(identity_fit) or identity_fit > 0.35:
                 self.severity_stable_since_s = None
                 self.severity_prev_pct = None
                 self.retry_pending = True
-                self.transient_reason = "FDI severity/residual not ready"
+                self.transient_reason = "confirmed motor identity/positive severity not ready"
                 return
         if not (0.0 <= loss <= 100.0) or not (0.0 <= injector.loss_percent <= 100.0):
             self.inhibited = True
