@@ -121,6 +121,9 @@ class FdiAntiWindupTests(unittest.TestCase):
             "motor_bounded_enabled_this_run ? motor_fault_confirmed :", CODE
         )
         self.assertIn("motor_fdi_saturation_streak_samples", STATE)
+        self.assertIn("motor_fdi_confirmed_loss_pct", STATE)
+        self.assertIn("motor_fdi_confirmed_loss_pct = motor_fault_loss_estimate_pct;", CODE)
+        self.assertIn("0.5f * motor_fdi_confirmed_loss_pct", CODE)
         self.assertIn("motor_fdi_last_excitation_valid", STATE)
         self.assertIn("motor_fdi_confirmed_at_ms = AP_HAL::millis();", CODE)
         self.assertIn("motor_fdi_saturation_streak_samples >= 200U", CODE)
@@ -205,6 +208,20 @@ class FdiAntiWindupTests(unittest.TestCase):
         self.assertFalse(hil_candidate(.30, .10, 45, .20, 40,
                                        bounded=False))
         self.assertTrue(hil_candidate(.70, .28, 45, .20, 24))
+
+
+    def test_weak_fault_does_not_self_clear_at_35_percent(self):
+        # For the 15%-60% HIL study, recovery must use hysteresis relative
+        # to the *confirmed* value, rather than a hard-coded 35%-loss cutoff.
+        def release_threshold(confirmed):
+            return min(35.0, max(5.0, confirmed * 0.5))
+        self.assertAlmostEqual(release_threshold(20), 10)
+        self.assertAlmostEqual(release_threshold(30), 15)
+        self.assertAlmostEqual(release_threshold(50), 25)
+        self.assertAlmostEqual(release_threshold(70), 35)
+        self.assertGreater(30, release_threshold(30))
+        self.assertGreater(20, release_threshold(20))
+
 
 
 if __name__ == "__main__":
