@@ -12,7 +12,8 @@ import mujoco.viewer
 import numpy as np
 from opposite_pair_sim import (OppositePairExperiment, allocate_opposite_pair,
                                apply_opposite_model_loss)
-from yaw_rate_schedule import YawRateEnvelope, allocate_pair_yaw_control
+from yaw_rate_schedule import (YawRateEnvelope, allocate_pair_yaw_control,
+                               paired_primary_feasibility)
 
 
 # Controller NED/FRD <-> MuJoCo NWU/FLU.
@@ -1648,7 +1649,10 @@ def run(cfg):
                     detector.update(
                         data.time,
                         meas_Omega,
-                        freeze_confirmed_estimate=yaw_rate_limiter_active or pair.active,
+                        freeze_confirmed_estimate=(
+                            yaw_rate_limiter_active or pair.active or
+                            (pair.retry_pending and data.time < pair.retry_at_s)
+                        ),
                     )
                 fault_active_now = fault.is_active(data.time)
                 was_pair_active = pair.active
@@ -1658,8 +1662,14 @@ def run(cfg):
                     fault, detector, yaw_envelope=yaw_envelope,
                 )
                 if was_pair_active and not pair.active:
-                    detector.begin_cooldown(data.time)
-                    l1_hold_until = data.time + l1.topology_transition_hold
+                    if fault_active_now and pair.retry_pending and not pair.inhibited:
+                        # The injector is STILL degraded; preserve identified
+                        # motor + magnitude for retry rather than erasing the
+                        # real fault as though it recovered.
+                        l1_hold_until = data.time + l1.topology_transition_hold
+                    else:
+                        detector.begin_cooldown(data.time)
+                        l1_hold_until = data.time + l1.topology_transition_hold
                 candidate_protection_active = (
                     not detector.confirmed
                     and detector.candidate_id in (1, 2, 3, 4)
@@ -1697,8 +1707,14 @@ def run(cfg):
                     spin_direction = (
                         -1 if pair.failed_motor_id in (1, 2) else +1
                     )
+                    spin_scale = (
+                        pair.position_priority_scale *
+                        min(1.0, pair.mirror_loss_percent /
+                            max(pair.estimated_loss_percent, 1e-6))
+                    )
                     yaw_feedback_request = yaw_envelope.requested_moment(
-                        pair.estimated_loss_percent, meas_Omega[2], spin_direction
+                        pair.estimated_loss_percent, meas_Omega[2],
+                        spin_direction, target_scale=spin_scale,
                     )
 
                 yaw_free_active = detector.yaw_free_latched or candidate_protection_active or (
@@ -1766,28 +1782,34 @@ def run(cfg):
                         raise RuntimeError(f"invalid L1-augmented output: {total_cmd}")
 
                     if pair.active:
+                        pair.plan_mirror(data.time, dt, total_cmd, mixer)
+                    if pair.active:
                         try:
                             if yaw_envelope.enabled:
                                 allocator_mode = "opposite_pair_yaw_rate_feedback"
                                 w_cmd, yaw_allocation_diag = allocate_pair_yaw_control(
                                     mixer, total_cmd, pair.failed_motor_id,
                                     pair.estimated_loss_percent, yaw_feedback_request,
+                                    mirror_loss_percent=pair.mirror_loss_percent,
+                                    reserve_n=pair.minimum_primary_reserve_n,
                                 )
                             else:
                                 allocator_mode = "opposite_pair_fdi_yaw_free"
-                                w_cmd = allocate_opposite_pair(
+                                w_cmd, yaw_allocation_diag = allocate_pair_yaw_control(
                                     mixer, total_cmd,
                                     pair.failed_motor_id, pair.estimated_loss_percent,
+                                    0.0, mirror_loss_percent=pair.mirror_loss_percent,
+                                    reserve_n=pair.minimum_primary_reserve_n,
                                 )
                         except (RuntimeError, np.linalg.LinAlgError) as allocation_error:
                             # The mirrored pair cannot realize F/Mx/My at the
                             # current requested wrench. Never force the second
                             # actuator degradation or terminate without a
                             # recoverable fallback to single-fault allocation.
-                            pair.active = False
-                            pair.inhibited = True
-                            pair.disengaged_at_s = float(data.time)
-                            pair.reason = f"paired primary authority infeasible: {allocation_error}"
+                            pair.defer(
+                                data.time,
+                                f"paired primary authority infeasible: {allocation_error}"
+                            )
                             # No second fault was actually applied yet: the
                             # one-motor FDI estimate remains valid. Keep it
                             # for the single-fault effectiveness allocator.
@@ -1806,7 +1828,9 @@ def run(cfg):
                             allocator_mode = "paired_unachievable_single_fault_fallback"
                     elif protection_active:
                         allocator_mode = (
-                            "fdi_effectiveness_aware"
+                            "paired_deferred_single_fault"
+                            if pair.retry_pending
+                            else "fdi_effectiveness_aware"
                             if detector.confirmed
                             else "fdi_candidate_protection"
                         )
@@ -1858,10 +1882,10 @@ def run(cfg):
                     motor,
                     data.time,
                 )
-                if pair.active:
+                if pair.active and pair.mirror_loss_percent > 0.0:
                     w_applied = apply_opposite_model_loss(
                         w_applied, motor, pair.opposite_motor_id,
-                        pair.estimated_loss_percent,
+                        pair.mirror_loss_percent,
                     )
                 thrusts, moments = motor_dist.actual_forces(w_applied, motor)
 
