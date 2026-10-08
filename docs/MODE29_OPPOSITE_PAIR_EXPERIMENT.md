@@ -16,8 +16,8 @@ If motor M1 (or M3) loses an inferred fraction of thrust, apply the **same fract
 ## Activation and estimator design
 
 1. Orange Pi sends the ordinary single-motor RC9..RC12 motor derating command. FDI does not read the injected loss/motor ID to *estimate* the failure.
-2. The existing matched-moment L1 observer and four single-motor signatures estimate fault motor and fraction. Confirmation currently requires: loss >= 60%, relative signature residual <= 0.35, 24 consistent cycles (nominal 60 ms at 400 Hz), and the existing roll/pitch excitation gate.
-3. With `M29_PAIR_EN=1` **at Mode29 entry**, and only for an actively injected fault, reject if FDI motor does not match the injection motor (safety supervision, NOT an estimator input). Reject inferred or injected loss > 70%; a full paired outage would leave too few independent actuators to meet F/Roll/Pitch.
+2. The existing matched-moment L1 observer and four single-motor signatures estimate any motor loss in the continuous range 0..100%. With M29_PAIR_EN=1, confirmation uses relative signature residual <=0.35, 24 consistent cycles (nominal 60ms at 400Hz), and an experimentally lowered 0.02 N*m roll/pitch disturbance observability gate, NOT a fixed loss-percentage threshold. With M29_PAIR_EN=0, the frozen original detector thresholds remain unchanged.
+3. With `M29_PAIR_EN=1` **at Mode29 entry**, and only for an actively injected fault, reject if FDI motor does not match the injection motor (safety supervision, NOT an estimator input). Do not impose any 60%/70% loss-percentage cutoff. Instead require positive identifiable loss, sufficient modeled static thrust and nondegenerate paired effectiveness. A full 100%+100% opposite outage is necessarily rank-deficient for simultaneous F/Roll/Pitch.
 4. Use the same thrust-domain softdrone static model to reduce the opposite motor by the FDI-inferred percentage. The original injection retains its **commanded** percentage; any mismatch is visible in the logs.
 5. The yaw-free allocator solves `[F,Mx,My] = B*diag(eta)*f_command`, using separate effectiveness entries for *both* the detected and mirrored motor. The ordinary position loop and gain scheduler are unchanged.
 6. Freeze the single-fault FDI identifier/severity while paired, because a two-motor residual no longer matches its one-motor signature model. This means automatic recovery of actual failed-motor effectiveness cannot be identified *during* mirroring; explicitly ending the injection releases mirroring and re-anchors the detector.
@@ -25,14 +25,14 @@ If motor M1 (or M3) loses an inferred fraction of thrust, apply the **same fract
 
 ### Guard thresholds (source constants; not proof of safety)
 
-- `M29_PAIR_EN`: 0 by default, 1 only in explicit experiment
-- Allowed both injected and estimated loss at engagement: 60–70% (FDI's existing confirmation threshold is 60%). Additionally, absolute FDI-versus-injected loss bias must be <=8 percentage points; injected truth is consulted only as a safety gate, never as the estimate.
+- `M29_PAIR_EN`: 0 by default, 1 only in explicit experiment. Normal 2026-10-06 flight behavior remains unchanged.
+- Input loss is any finite 0–100%. At 0%, there is no physical motor fault to identify, so mirroring stays inactive. The 100% total opposite-pair outage remains an accepted experimental input, but cannot enable the full three-objective paired allocator because there are only two effective actuators. Condition on physical effectiveness/rank and static thrust margin, not a percentage boundary. Absolute estimated-versus-commanded bias must also be <=8 percentage points for this controlled injection experiment.
 - Conservative static model margin: >=1.5, using measured-range thrust at nominal `w=80` (1800us) and max configured tilt
 - Abort mirror if `abs(body_yaw_rate) > 4.0 rad/s`, horizontal position error >0.50m, or altitude error >0.40m, or AHRS position/rate is invalid
 - Mode29 is constrained to its original takeoff+settle hover-gating conditions
 - Arming with `M29_PAIR_EN=0` has the original one-motor behavior; the experiment flag is snapshotted on mode entry.
 
-**Important:** With estimated loss 50% after an injected 60%, the existing FDI's 60% confirmation gate prevents pair activation. The prototype does not silently trust the oracle to bypass that problem. Check logs rather than lowering threshold in real flight.
+**Important:** Any chosen injected loss (e.g. 7.5%, 37%, 82%, 100%) is logged as a continuous-valued input. Blind FDI might not confirm low-loss cases due sensor noise and excitation, or pair control might be infeasible at high loss; those are observable outcomes, not invalid input arguments. In the opt-in firmware experiment the observer threshold is replaced by persistence/residual/moment criteria; no guarantee of identifying arbitrarily small faults is implied. Changes to FDI sensitivity are strictly opt-in and unvalidated for real free flight.
 
 ## Observability (DataFlash BIN)
 
