@@ -26,6 +26,16 @@ The frozen snapshot branch must remain pointed at the original source commit. Th
 - ZIP bytes: `2486737`
 - Release uploaded 2026-10-07; its ZIP has the same SHA-256 as the 2026-10-06 workflow artifact. Note: Release tag `APM` itself refers to an older `main` commit and must not be used to select the baseline sources.
 
+## Dedicated frozen Orange Pi milestone (no 2026-10-07 yaw tuning)
+
+- Frozen Orange Pi branch: `milestone/orangepi-mode29-20261006-no-yaw-protection`
+- **Exact** paired commit: `2c606d7e532c54416fc850995449b9acfd6f6a1b`
+- This branch deliberately points to the **same repository snapshot** as the Pixhawk milestone, so `orangepi/` cannot drift out of alignment with the known firmware source.
+- The three **2026-10-07-only** yaw tuning parameters `M29_YAW_KD`, `M29_YAW_RMAX`, and `M29_YAW_MMAX` are **absent** from all files in the frozen `orangepi/` directory.
+- The new `feature/mode29-from-60pct-20261006` development branch also excludes those parameter declarations and YAML values; its YAML files differ from the frozen snapshot only by changing the informational `firmware_branch` metadata.
+- Do not copy these October 7 yaw parameters or related candidate/reduced-attitude changes into the new work without an explicit decision and separate verification.
+- Changes to a GitHub branch do not automatically change any scripts deployed on the physical Orange Pi or saved parameters on the Pixhawk.
+
 ## Paired Orange Pi source (same exact commit)
 
 The Orange Pi Python scripts and YAML live **within the same repository and commit** under `orangepi/`. No separate Orange Pi repository revision is needed.
