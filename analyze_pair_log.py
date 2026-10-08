@@ -43,11 +43,25 @@ def main():
             int(number(paired[0], "pair_opposite_motor", 0)),
             number(paired[0], "pair_loss_estimate_pct"),
         ))
-        print("Peak during pair: |body yaw rate|={:.3f} rad/s, XY={:.3f}m, Z={:.3f}m".format(
-            max(abs(number(r, "yaw_rate_rps", 0)) for r in paired),
+        peak_rate = max(abs(number(r, "yaw_rate_rps", 0)) for r in paired)
+        print("Peak during pair: |body yaw rate|={:.3f} rad/s ({:.1f} deg/s), XY={:.3f}m, Z={:.3f}m".format(
+            peak_rate, math.degrees(peak_rate),
             max(math.hypot(number(r, "x"), number(r, "y")) for r in paired),
             max(abs(number(r, "z")-number(r, "target_z")) for r in paired),
         ))
+        cap = number(paired[0], "pair_yaw_cap_deg_s", 0.0)
+        target_rate = number(paired[0], "pair_yaw_target_deg_s", 0.0)
+        if cap > 0:
+            within = sum(
+                math.degrees(abs(number(r, "yaw_rate_rps", 0))) <=
+                number(r, "pair_yaw_cap_deg_s", cap)
+                for r in paired
+            )
+            saturated = sum(number(r, "pair_yaw_saturated", 0) > 0.5
+                            for r in paired)
+            print(f"Yaw max speed cap: {cap:.1f} deg/s; signed spin target: {target_rate:.1f} deg/s")
+            print(f"Yaw cap compliance: {within}/{len(paired)} samples within cap")
+            print(f"Yaw moment allocator saturation: {saturated}/{len(paired)} samples")
     else:
         print("Opposite pair never engaged (check FDI estimate/threshold/guard)")
 
