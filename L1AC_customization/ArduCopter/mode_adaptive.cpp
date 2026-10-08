@@ -477,6 +477,13 @@ void ModeAdaptive::update_motor_pair_mode(bool motor_degradation_active)
 
     const float loss_pct =
         constrain_float(motor_fault_loss_estimate_pct, 0.0f, 100.0f);
+    if (loss_pct > MOTOR_PAIR_MAX_LOSS_PCT ||
+        motor_degradation_loss_pct > MOTOR_PAIR_MAX_LOSS_PCT) {
+        motor_pair_inhibited = true;
+        GCS_SEND_TEXT(MAV_SEVERITY_CRITICAL,
+                      "Mode29 pair blocked: loss exceeds safe experiment envelope");
+        return;
+    }
     const float eta = 1.0f - 0.01f * loss_pct;
 
 #if REAL_OR_SITL
