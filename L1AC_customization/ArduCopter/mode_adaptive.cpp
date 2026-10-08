@@ -1951,13 +1951,42 @@ void ModeAdaptive::run()
     VectorN<float, 4> motorPWMCommanded;
 #if REAL_OR_SITL
     if (motor_bounded_enabled_this_run) {
-        const VectorN<float, 4> requested =
+        VectorN<float, 4> requested =
             thrustMomentCmd + L1thrustMomentCmd;
+        const Vector3f omega=AP::ahrs().get_gyro();
+        if (!mode29_finite(omega)) {
+            abort_mode29("HIL invalid gyro before allocation");
+            return;
+        }
+        // No fixed-heading catch-up at high spin. Desired yaw is physical
+        // braking torque, clipped to the *remaining* nullspace below.
+        // Rate damping persists through the entire fault recovery.
+        if (motor_fault_confirmed || motor_bounded_recovery_active ||
+            motor_pair_active || motor_fault_yaw_free_latched) {
+            requested[3]=constrain_float(-0.045f*omega.z,-0.15f,0.15f);
+        }
+        // Dynamic admission uses the same current F/Mx/My request as the
+        // bounded mixer. Transient infeasibility never permanently latches.
+        update_bounded_pair_mode(motor_degradation_active,requested,0.0025f);
         float effectiveness[4] = {1.0f,1.0f,1.0f,1.0f};
-        if (motor_fault_confirmed &&
-            motor_fault_detected_id >= 1 && motor_fault_detected_id <= 4) {
-            effectiveness[motor_fault_detected_id-1U] =
-                1.0f-constrain_float(motor_fault_loss_estimate_pct,0.0f,100.0f)*0.01f;
+        // During intentional fault-injection release, known applied
+        // effectiveness and command compensation are staged together.
+        // This is a HIL injection protocol, not real unknown fault recovery.
+        if (!motor_degradation_active && motor_bounded_recovery_active &&
+            motor_bounded_injected_motor_id>=1 &&
+            motor_bounded_injected_motor_id<=4) {
+            effectiveness[motor_bounded_injected_motor_id-1U]=
+                1.0f-0.01f*motor_bounded_injected_loss_pct;
+        } else if (motor_fault_confirmed &&
+                   motor_fault_detected_id>=1 && motor_fault_detected_id<=4) {
+            effectiveness[motor_fault_detected_id-1U]=
+                1.0f-0.01f*constrain_float(
+                    motor_fault_loss_estimate_pct,0.0f,100.0f);
+        }
+        if (motor_pair_active && motor_pair_opposite_id>=1 &&
+            motor_pair_opposite_id<=4) {
+            effectiveness[motor_pair_opposite_id-1U]=
+                1.0f-0.01f*constrain_float(motor_pair_loss_pct,0.0f,100.0f);
         }
         Mode29BoundedDiag allocation;
         if (!mode29_bounded_allocate(requested, effectiveness,
@@ -1970,6 +1999,20 @@ void ModeAdaptive::run()
         motor_bounded_predicted_collective_n = allocation.predicted_f;
         motor_bounded_roll_error_nm = allocation.roll_error;
         motor_bounded_pitch_error_nm = allocation.pitch_error;
+        motor_bounded_yaw_min_nm = allocation.yaw_min_nm;
+        motor_bounded_yaw_max_nm = allocation.yaw_max_nm;
+        motor_bounded_yaw_unbrakeable =
+            fabsf(omega.z)>0.5f &&
+            ((omega.z<0.0f && allocation.yaw_max_nm<=0.0f) ||
+             (omega.z>0.0f && allocation.yaw_min_nm>=0.0f));
+        static uint32_t last_yaw_no_brake_warn_ms=0U;
+        if (motor_bounded_yaw_unbrakeable &&
+            fabsf(omega.z)>3.14159265f &&
+            AP_HAL::millis()-last_yaw_no_brake_warn_ms>=1500U) {
+            GCS_SEND_TEXT(MAV_SEVERITY_WARNING,
+                          "Mode29 HIL yaw not brakeable; preserving F/RP");
+            last_yaw_no_brake_warn_ms=AP_HAL::millis();
+        }
     } else
 #endif
     if (motor_fault_confirmed) {
