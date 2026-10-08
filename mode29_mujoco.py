@@ -1070,6 +1070,7 @@ class BlindMotorFaultDetector:
         self.recovery_count = 0
         self.loss_estimate_percent = 0.0
         self.residual_ratio = 1.0
+        self.identity_fit_ratio = 1.0  # remembered *detection* fit, not innovation fit
         self.sigma_filtered = np.zeros(3)
         self.signature_filtered = np.zeros((4, 3))
         self.sigma_baseline = np.zeros(3)
@@ -1127,6 +1128,7 @@ class BlindMotorFaultDetector:
         self._reset_candidate()
         self.loss_estimate_percent = 0.0
         self.residual_ratio = 1.0
+        self.identity_fit_ratio = 1.0
         self.prev_cmd = None
         self.prev_w_nominal = None
         self.sigma_baseline = self.sigma_filtered.copy()
@@ -1263,6 +1265,7 @@ class BlindMotorFaultDetector:
                 self.residual_ratio = 1.0
                 self.sigma_baseline = self.sigma_filtered.copy()
                 self.cooldown_until_s = float(t) + self.cooldown_seconds
+                self.identity_fit_ratio = 1.0
                 self.prev_omega = omega.copy()
                 self.prev_cmd = None
                 self.prev_w_nominal = None
@@ -1314,6 +1317,7 @@ class BlindMotorFaultDetector:
             self.confirmed = True
             self.yaw_free_latched = True
             self.detected_id = best_motor
+            self.identity_fit_ratio = best_ratio
             self.recovery_count = 0
             # The residual filter still contains the pre-reconfiguration fault
             # step. Reset only that transient memory; otherwise it is counted
