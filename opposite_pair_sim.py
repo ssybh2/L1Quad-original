@@ -73,6 +73,9 @@ class OppositePairExperiment:
     """
     def __init__(self, cfg, vehicle, motor, max_tilt_deg):
         self.enabled = bool(cfg.get("enabled", False))
+        self.source = str(cfg.get("source", "fdi")).lower()
+        if self.source not in ("fdi", "oracle"):
+            raise ValueError("opposite_pair.source must be fdi or oracle")
         self.motor = motor
         self.mass = float(vehicle["mass_kg"])
         self.gravity = float(vehicle["gravity_mps2"])
@@ -109,29 +112,38 @@ class OppositePairExperiment:
                  yaw_rate > self.max_spin)
 
         if self.active:
-            if guard or not original_fault_active or not detector.confirmed:
+            if guard or not original_fault_active or (self.source == "fdi" and not detector.confirmed):
                 self.active = False
                 self.inhibited = True
                 self.reason = "pair disengaged: fault ended, detector lost or state guard exceeded"
             return
-        if self.inhibited or not original_fault_active or not detector.confirmed:
+        if self.inhibited or not original_fault_active:
             return
         if guard:
             return
-        if detector.detected_id != injector.motor_id:
-            self.inhibited = True
-            self.reason = "FDI motor ID disagrees with controlled injected fault"
-            return
-        loss = float(detector.loss_estimate_percent)
-        if not np.isfinite(loss) or not np.isfinite(detector.residual_ratio):
-            return
-        if loss < 60.0 or detector.residual_ratio > 0.35:
-            return
+        if self.source == "oracle":
+            # Simulation-only independent check of allocation physics:
+            # do NOT mistake this for an observer-estimated failure.
+            estimated_motor_id = injector.motor_id
+            loss = float(injector.loss_percent)
+        else:
+            if not detector.confirmed:
+                return
+            estimated_motor_id = detector.detected_id
+            if estimated_motor_id != injector.motor_id:
+                self.inhibited = True
+                self.reason = "FDI motor ID disagrees with controlled injected fault"
+                return
+            loss = float(detector.loss_estimate_percent)
+            if not np.isfinite(loss) or not np.isfinite(detector.residual_ratio):
+                return
+            if loss < 60.0 or detector.residual_ratio > 0.35:
+                return
         if loss > self.max_loss or injector.loss_percent > self.max_loss:
             self.inhibited = True
             self.reason = "partial-actuator experiment limited to <=70% paired loss"
             return
-        if abs(loss - injector.loss_percent) > self.max_bias:
+        if self.source == "fdi" and abs(loss - injector.loss_percent) > self.max_bias:
             self.inhibited = True
             self.reason = "FDI estimate disagrees with known injected loss"
             return
@@ -146,7 +158,7 @@ class OppositePairExperiment:
             self.reason = "insufficient estimated thrust margin"
             return
         self.active = True
-        self.failed_motor_id = detector.detected_id
+        self.failed_motor_id = estimated_motor_id
         self.opposite_motor_id = opposite_motor(self.failed_motor_id)
         self.estimated_loss_percent = loss
         self.activated_at_s = float(t)
