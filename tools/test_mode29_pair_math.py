@@ -75,8 +75,8 @@ class PairedLossModelTests(unittest.TestCase):
             self.assertGreater(gram_determinant(eta), 1.0e-10)
 
     def test_model_thrust_margin_at_60_percent_loss(self):
-        # 2026-10-06 6S cubic, unvalidated extrapolation to 2000 us.
-        w = 100.0
+        # 2026-10-06 6S cubic, using the thrust-stand-validated range.
+        w = 80.0
         x = max(0.0, w - 4.47703190)
         fmax = max(0.0, ((-2.62683159e-05 * x +
                            4.01680390e-03) * x +
