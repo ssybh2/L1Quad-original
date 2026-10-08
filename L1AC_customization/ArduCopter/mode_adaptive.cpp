@@ -2074,7 +2074,25 @@ void ModeAdaptive::run()
             constrain_float(motorPWM[motor_index], 0.0f, 100.0f);
     };
 
-    if (motor_degradation_active) {
+    if (motor_bounded_enabled_this_run) {
+        // The actuator-side simulator emulates ONLY the controlled Orange Pi
+        // injection. On command release, phase its imposed loss down while
+        // the bounded allocator uses the same staged effectiveness.
+        if (motor_bounded_injected_motor_id>=1 &&
+            motor_bounded_injected_motor_id<=4 &&
+            motor_bounded_injected_loss_pct>0.001f) {
+            apply_modelled_motor_loss(
+                motor_bounded_injected_motor_id-1U,
+                motor_bounded_injected_loss_pct);
+        }
+        // The synthetic second fault is distinct from the injected primary.
+        if (motor_pair_active && motor_pair_opposite_id>=1 &&
+            motor_pair_opposite_id<=4 &&
+            motor_pair_opposite_id!=motor_bounded_injected_motor_id) {
+            apply_modelled_motor_loss(motor_pair_opposite_id-1U,
+                                     motor_pair_loss_pct);
+        }
+    } else if (motor_degradation_active) {
         apply_modelled_motor_loss(motor_degradation_motor_id - 1U,
                                  motor_degradation_loss_pct);
         if (motor_pair_active &&
@@ -2137,6 +2155,21 @@ void ModeAdaptive::run()
                        (double)motor_bounded_roll_error_nm,
                        (double)motor_bounded_pitch_error_nm,
                        (uint32_t)motor_bounded_fdi_freeze_samples);
+
+    AP::logger().Write("L1PB",
+                       "ena,mir,targ,retry,wait,ymn,ymx,spin,rec,inj",
+                       "BffIBfffBf",
+                       (uint8_t)(motor_bounded_enabled_this_run &&
+                                 motor_pair_enabled_this_run),
+                       (double)motor_pair_loss_pct,
+                       (double)motor_pair_target_loss_pct,
+                       (uint32_t)motor_pair_retry_count,
+                       (uint8_t)motor_pair_retry_pending,
+                       (double)motor_bounded_yaw_min_nm,
+                       (double)motor_bounded_yaw_max_nm,
+                       (double)AP::ahrs().get_gyro().z,
+                       (uint8_t)motor_bounded_recovery_active,
+                       (double)motor_bounded_injected_loss_pct);
 
     // L1PR keeps the paired experiment observable alongside L1DG (injected
     // truth), L1FD (blind FDI) and L1GS (active scheduled gains).
