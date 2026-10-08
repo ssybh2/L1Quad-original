@@ -57,17 +57,22 @@ class IndependentAnchorTests(unittest.TestCase):
         self.assertAlmostEqual(speed.limit_deg_s(40), 120.)
         self.assertAlmostEqual(speed.limit_deg_s(37), 108.)
 
-    def test_anticipatory_braking_preserves_heading_freedom(self):
+    def test_nonzero_target_spin_and_anticipatory_braking(self):
         speed = YawRateEnvelope({
             "enabled": True,
+            "target_spin_fraction": .65,
             "brake_start_fraction": .75,
             "rate_gain_nm_per_rps": .08,
             "max_corrective_moment_nm": .2
         }, self.nodes)
-        self.assertEqual(speed.requested_moment(30, 0.), 0.)
-        self.assertEqual(speed.requested_moment(30, math.radians(45)), 0.)
-        self.assertLess(speed.requested_moment(30, math.radians(100)), 0.)
-        self.assertGreater(speed.requested_moment(30, math.radians(-100)), 0.)
+        self.assertAlmostEqual(math.degrees(speed.target_rate_rps(30, +1)), 52.)
+        self.assertAlmostEqual(math.degrees(speed.target_rate_rps(30, -1)), -52.)
+        self.assertGreater(speed.requested_moment(30, 0., +1), 0.)
+        self.assertLess(speed.requested_moment(30, 0., -1), 0.)
+        self.assertGreater(speed.requested_moment(30, math.radians(30), +1), 0.)
+        self.assertLess(speed.requested_moment(30, math.radians(100), +1), 0.)
+        self.assertGreater(speed.requested_moment(30, math.radians(-100), -1), 0.)
+        self.assertLessEqual(abs(speed.requested_moment(30, 0., +1)), .2)
 
     def test_primary_wrench_feasible_with_yaw_priority_second(self):
         mixer = ToyMixer()
