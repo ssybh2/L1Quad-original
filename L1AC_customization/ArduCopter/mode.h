@@ -2067,6 +2067,20 @@ private:
     float motor_bounded_pitch_error_nm = 0.0f;
     uint32_t motor_bounded_fdi_freeze_samples = 0U;
 
+    // HIL-only continuous mirror and staged fault-release controller.
+    // All times are in the Mode29 scheduler; no hard loss-percentage threshold.
+    float motor_bounded_injected_loss_pct = 0.0f;
+    uint8_t motor_bounded_injected_motor_id = 0U;
+    bool motor_bounded_recovery_active = false;
+    float motor_bounded_yaw_min_nm = 0.0f;
+    float motor_bounded_yaw_max_nm = 0.0f;
+    bool motor_bounded_yaw_unbrakeable = false;
+    uint32_t motor_pair_retry_after_ms = 0U;
+    uint32_t motor_pair_feasible_since_ms = 0U;
+    uint32_t motor_pair_retry_count = 0U;
+    bool motor_pair_retry_pending = false;
+    float motor_pair_target_loss_pct = 0.0f;
+
     bool motor_pair_enabled_this_run = false;
     bool motor_pair_active = false;
     bool motor_pair_inhibited = false;
@@ -2101,6 +2115,9 @@ private:
     void clear_auto_motor_fault();
     void reset_motor_pair_mode();
     void update_motor_pair_mode(bool motor_degradation_active);
+    void update_bounded_pair_mode(bool motor_degradation_active,
+                                  const VectorN<float, 4> &wrench,
+                                  float dt);
     void update_auto_motor_fault_detector(float time_in_this_run);
     void reset_gain_schedule();
     void update_gain_schedule(bool motor_degradation_active);
