@@ -2058,6 +2058,15 @@ private:
 
     // The FDI single-fault estimate is frozen once a mirrored impairment starts.
     // The two-motor residual cannot be identified by the original single-fault FDI.
+    // New constrained allocation is a separately opted-in HIL-only feature.
+    bool motor_bounded_enabled_this_run = false;
+    bool motor_bounded_primary_saturated = false;
+    float motor_bounded_requested_collective_n = 0.0f;
+    float motor_bounded_predicted_collective_n = 0.0f;
+    float motor_bounded_roll_error_nm = 0.0f;
+    float motor_bounded_pitch_error_nm = 0.0f;
+    uint32_t motor_bounded_fdi_freeze_samples = 0U;
+
     bool motor_pair_enabled_this_run = false;
     bool motor_pair_active = false;
     bool motor_pair_inhibited = false;
