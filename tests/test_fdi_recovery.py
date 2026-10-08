@@ -34,6 +34,39 @@ class RecoveryCooldownTests(unittest.TestCase):
         self.assertIsNone(d.prev_cmd)
         self.assertIsNone(d.prev_w_nominal)
 
+    def test_saturated_allocator_freezes_confirmed_severity(self):
+        d = self.new_detector()
+        d.confirmed = True
+        d.detected_id = 1
+        d.loss_estimate_percent = 83.7
+        d.sigma_valid = True
+        d.prev_omega = np.zeros(3)
+        d.record_control(np.array([13., 1., 1., 0.]),
+                         np.array([80., 80., 80., 80.]))
+        # An impossible observed angular acceleration does not imply
+        # the rotor instantaneously deteriorated by thousands of percent.
+        d.update(16.25, np.array([15., -20., 9.]),
+                 freeze_confirmed_estimate=True)
+        self.assertAlmostEqual(d.loss_estimate_percent, 83.7)
+        self.assertEqual(d.frozen_estimate_samples, 1)
+        self.assertFalse(d.loss_instant_percent > 100.)
+
+    def test_implausible_innovation_is_rejected_without_magnitude_lock(self):
+        d = self.new_detector()
+        d.confirmed = True
+        d.detected_id = 1
+        d.loss_estimate_percent = 76.
+        d.sigma_valid = True
+        d.prev_omega = np.zeros(3)
+        d.signature_filtered[0] = np.array([0.04, 0.03, .01])
+        d.record_control(np.array([13., 0., 0., 0.]),
+                         np.array([20., 20., 20., 20.]))
+        d.update(16.3, np.array([17., -10., 8.]),
+                 freeze_confirmed_estimate=False)
+        self.assertAlmostEqual(d.loss_estimate_percent, 76.)
+        self.assertGreater(d.implausible_innovation_count, 0)
+        self.assertLessEqual(abs(d.loss_instant_percent), 100.)
+
     def test_cooldown_reanchors_baseline_without_false_confirmation(self):
         d = self.new_detector()
         d.begin_cooldown(30.0)
