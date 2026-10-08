@@ -1766,18 +1766,42 @@ def run(cfg):
                         raise RuntimeError(f"invalid L1-augmented output: {total_cmd}")
 
                     if pair.active:
-                        if yaw_envelope.enabled:
-                            allocator_mode = "opposite_pair_yaw_rate_feedback"
-                            w_cmd, yaw_allocation_diag = allocate_pair_yaw_control(
-                                mixer, total_cmd, pair.failed_motor_id,
-                                pair.estimated_loss_percent, yaw_feedback_request,
-                            )
-                        else:
-                            allocator_mode = "opposite_pair_fdi_yaw_free"
-                            w_cmd = allocate_opposite_pair(
-                                mixer, total_cmd,
-                                pair.failed_motor_id, pair.estimated_loss_percent,
-                            )
+                        try:
+                            if yaw_envelope.enabled:
+                                allocator_mode = "opposite_pair_yaw_rate_feedback"
+                                w_cmd, yaw_allocation_diag = allocate_pair_yaw_control(
+                                    mixer, total_cmd, pair.failed_motor_id,
+                                    pair.estimated_loss_percent, yaw_feedback_request,
+                                )
+                            else:
+                                allocator_mode = "opposite_pair_fdi_yaw_free"
+                                w_cmd = allocate_opposite_pair(
+                                    mixer, total_cmd,
+                                    pair.failed_motor_id, pair.estimated_loss_percent,
+                                )
+                        except (RuntimeError, np.linalg.LinAlgError) as allocation_error:
+                            # The mirrored pair cannot realize F/Mx/My at the
+                            # current requested wrench. Never force the second
+                            # actuator degradation or terminate without a
+                            # recoverable fallback to single-fault allocation.
+                            pair.active = False
+                            pair.inhibited = True
+                            pair.disengaged_at_s = float(data.time)
+                            pair.reason = f"paired primary authority infeasible: {allocation_error}"
+                            detector.begin_cooldown(data.time)
+                            l1_hold_until = data.time + l1.topology_transition_hold
+                            total_cmd[3] = float(np.clip(
+                                -detector.fault_yaw_rate_damping*meas_Omega[2],
+                                -detector.fault_max_yaw_moment,
+                                detector.fault_max_yaw_moment,
+                            ))
+                            if protection_active and protection_motor in (1, 2, 3, 4):
+                                w_cmd = mixer.allocate_effectiveness_aware(
+                                    total_cmd, protection_motor, protection_loss
+                                )
+                            else:
+                                w_cmd = mixer.allocate(total_cmd)
+                            allocator_mode = "paired_unachievable_single_fault_fallback"
                     elif protection_active:
                         allocator_mode = (
                             "fdi_effectiveness_aware"
