@@ -78,77 +78,107 @@ class YawRateEnvelope:
         return math.radians(self.limit_deg_s(loss_percent)) * self.hard_abort_multiplier
 
 
-def allocate_pair_yaw_control(mixer, cmd, failed_motor_id, loss_percent, target_yaw_moment_nm):
-    """Allocate F/Mx/My plus bounded Mz through physical thrust nullspace.
+def paired_primary_feasibility(mixer, cmd, failed_motor_id, loss_percent,
+                               mirror_loss_percent=None, reserve_n=0.0):
+    """Bounded F/Mx/My feasibility for ANY primary and opposite loss fractions.
 
-    The equation B f_actual = [F,Mx,My] is enforced BEFORE using the remaining
-    one-dimensional degree of freedom for yaw. No virtual yaw-rate clamp.
-    If the primary wrench is infeasible, request a safe failure to the caller.
+    This test uses the actual asymmetric rotor caps. Unlike a static
+    collective-thrust margin, it rejects transient roll/pitch moment requests
+    outside the achievable wrench polytope. It DOES NOT use motor torque to
+    repair an infeasible primary wrench.
     """
-    if failed_motor_id not in (1, 2, 3, 4):
-        raise ValueError("failed motor id must be 1..4")
-    loss = float(loss_percent)
-    if not math.isfinite(loss) or not (0 <= loss <= 100):
-        raise ValueError("fault percentage must be in [0,100]")
-    if not math.isfinite(target_yaw_moment_nm):
-        raise ValueError("yaw torque request must be finite")
-    eta = np.ones(4, dtype=float)
-    index = failed_motor_id - 1
-    other = index ^ 1
-    eta[index] = eta[other] = 1 - loss / 100.0
-    B = np.vstack((
+    from opposite_pair_sim import opposite_motor
+    other = opposite_motor(int(failed_motor_id)) - 1
+    primary = float(loss_percent)
+    mirror = primary if mirror_loss_percent is None else float(mirror_loss_percent)
+    if not np.isfinite([primary, mirror, reserve_n]).all() or not (
+        0 <= primary <= 100 and 0 <= mirror <= 100 and reserve_n >= 0
+    ):
+        raise ValueError("motor losses must be finite in [0,100], reserve >=0")
+    eta = np.ones(4)
+    eta[failed_motor_id - 1] = 1 - primary / 100
+    eta[other] = 1 - mirror / 100
+    b = np.vstack((
         np.ones(4),
-        np.array([-1., 1., 1., -1.])*float(mixer.L)*0.5,
-        np.array([1., -1., 1., -1.])*float(mixer.D)*0.5,
+        np.array([-1., 1., 1., -1.]) * float(mixer.L) * .5,
+        np.array([1., -1., 1., -1.]) * float(mixer.D) * .5,
     ))
-    A = B @ np.diag(eta)
-    if np.linalg.matrix_rank(A, tol=1e-8) < 3:
-        raise RuntimeError("paired motors leave an uncontrollable primary wrench")
-    # Minimum-norm *actual* rotor thrust solution, then yaw-nullspace motion.
-    y = np.asarray(cmd[:3], dtype=float)
-    f0 = B.T @ np.linalg.solve(B @ B.T, y)
-    n = np.array([1.0, 1.0, -1.0, -1.0])
+    a = b @ np.diag(eta)
+    empty = {"feasible": False, "reason": "rank deficient", "eta": eta,
+             "interval_width_n": 0.0}
+    if np.linalg.matrix_rank(a, tol=1e-8) < 3:
+        return empty
+    desired = np.asarray(cmd[:3], dtype=float)
+    if desired.shape != (3,) or not np.isfinite(desired).all():
+        raise ValueError("primary wrench must be finite F/Mx/My")
+    f0 = b.T @ np.linalg.solve(b @ b.T, desired)
+    n = np.array([1., 1., -1., -1.])
     cap = eta * float(mixer.motor.thrust(100.0))
-    lo = -float("inf")
-    hi = float("inf")
+    lo, hi = -float("inf"), float("inf")
     for fi, ni, ci in zip(f0, n, cap):
-        a, b = (-fi / ni), ((ci-fi)/ni)
-        lo, hi = max(lo, min(a, b)), min(hi, max(a, b))
-    if not (np.isfinite(lo) and np.isfinite(hi) and lo <= hi):
-        raise RuntimeError("primary thrust/roll/pitch wrench infeasible with rotor thrust bounds")
+        left, right = (reserve_n - fi) / ni, (ci - reserve_n - fi) / ni
+        lo, hi = max(lo, min(left, right)), min(hi, max(left, right))
+    if not np.isfinite([lo, hi]).all() or lo > hi + 1e-9:
+        return {**empty, "reason": "primary F/Mx/My wrench infeasible with rotor bounds"}
+    return {"feasible": True, "reason": "", "eta": eta, "f0": f0,
+            "null_direction": n, "cap": cap, "lo": lo, "hi": hi,
+            "interval_width_n": max(0., float(hi-lo))}
+
+
+def allocate_pair_yaw_control(mixer, cmd, failed_motor_id, loss_percent,
+                              target_yaw_moment_nm, mirror_loss_percent=None,
+                              reserve_n=0.0):
+    """Highest priority F/Mx/My; Yaw moment uses ONLY the remaining nullspace.
+
+    primary fault and synthetic opposite fault can have *different* effective
+    losses during a smooth mirror ramp. Never clip the primary wrench silently.
+    """
+    result = paired_primary_feasibility(
+        mixer, cmd, failed_motor_id, loss_percent,
+        mirror_loss_percent=mirror_loss_percent, reserve_n=reserve_n
+    )
+    if not result["feasible"]:
+        raise RuntimeError(result["reason"])
+    if not math.isfinite(target_yaw_moment_nm):
+        raise ValueError("non-finite yaw moment request")
+    lo, hi = result["lo"], result["hi"]
+    f0, n, cap, eta = (result[k] for k in
+                       ("f0", "null_direction", "cap", "eta"))
 
     def get_yaw(s):
-        thrust = f0 + s*n
-        w_actual = [mixer.motor.w_from_thrust(max(0.0, f)) for f in thrust]
+        force = f0 + s*n
+        w_actual = [mixer.motor.w_from_thrust(max(0., f)) for f in force]
         moments = np.array([mixer.motor.moment(w) for w in w_actual])
         return float(np.array([1., 1., -1., -1.]) @ moments)
 
-    yaw_a = get_yaw(lo)
-    yaw_b = get_yaw(hi)
-    target = float(np.clip(target_yaw_moment_nm, min(yaw_a, yaw_b), max(yaw_a, yaw_b)))
+    yaw_a, yaw_b = get_yaw(lo), get_yaw(hi)
+    target = float(np.clip(target_yaw_moment_nm,
+                           min(yaw_a, yaw_b), max(yaw_a, yaw_b)))
     left, right = lo, hi
-    inc = yaw_b >= yaw_a
+    increasing = yaw_b >= yaw_a
     for _ in range(28):
-        mid = (left+right)*0.5
-        ym = get_yaw(mid)
-        if (ym < target) == inc:
+        mid = (left + right) * 0.5
+        if (get_yaw(mid) < target) == increasing:
             left = mid
         else:
             right = mid
-    s = (left+right)*0.5
-    f_applied = np.clip(f0+s*n, 0.0, cap)
-    # f_nominal commands generate the actual f_applied only AFTER losses.
-    f_nominal = f_applied / eta
-    w_cmd = np.array([mixer.motor.w_from_thrust(f) for f in f_nominal])
-    realized_target = get_yaw(s)
-    if not np.isfinite(w_cmd).all():
-        raise RuntimeError("non-finite yaw-limited actuator allocation")
-    return np.clip(w_cmd, 0.0, 100.0), {
+    scalar = 0.5*(left+right)
+    applied = np.clip(f0 + scalar*n, 0., cap)
+    if (eta <= 0).any():
+        raise RuntimeError("pair allocation requires positive effectiveness")
+    nominal = applied / eta
+    command = np.array([mixer.motor.w_from_thrust(f) for f in nominal])
+    if not np.isfinite(command).all():
+        raise RuntimeError("non-finite paired motor command")
+    return np.clip(command, 0., 100.), {
         "requested_yaw_nm": float(target_yaw_moment_nm),
         "bounded_yaw_nm": target,
-        "predicted_yaw_nm": realized_target,
+        "predicted_yaw_nm": get_yaw(scalar),
         "available_yaw_min_nm": min(yaw_a, yaw_b),
         "available_yaw_max_nm": max(yaw_a, yaw_b),
         "saturated": abs(target - target_yaw_moment_nm) > 1e-7,
         "primary_wrench_feasible": True,
+        "primary_nullspace_width_n": result["interval_width_n"],
+        "mirrored_loss_pct": float(loss_percent if mirror_loss_percent is None
+                                    else mirror_loss_percent),
     }
