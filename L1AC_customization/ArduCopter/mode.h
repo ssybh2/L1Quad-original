@@ -1952,6 +1952,13 @@ public:
     static constexpr float MOTOR_FDI_MAX_RESIDUAL_RATIO = 0.35f;
     static constexpr float MOTOR_FDI_MIN_RP_MOMENT = 0.20f;          // N*m
 
+    // Experimental opposite-pair effectiveness matching: hard-coded containment.
+    // Kept independent of 2026-10-07 yaw-damping/reduced-attitude changes.
+    static constexpr float MOTOR_PAIR_MIN_STATIC_MARGIN = 1.5f;
+    static constexpr float MOTOR_PAIR_MAX_SPIN_RAD_S = 4.0f;
+    static constexpr float MOTOR_PAIR_MAX_XY_ERROR_M = 0.50f;
+    static constexpr float MOTOR_PAIR_MAX_Z_ERROR_M = 0.40f;
+
     bool requires_GPS() const override { return false; }
     bool has_manual_throttle() const override { return true; }
     bool allows_arming(AP_Arming::Method method) const override { return true; };
@@ -2043,6 +2050,16 @@ private:
     VectorN<float, 4> motor_fault_nominal_prev;
     bool motor_fault_nominal_prev_valid = false;
 
+    // The FDI single-fault estimate is frozen once a mirrored impairment starts.
+    // The two-motor residual cannot be identified by the original single-fault FDI.
+    bool motor_pair_enabled_this_run = false;
+    bool motor_pair_active = false;
+    bool motor_pair_inhibited = false;
+    uint8_t motor_pair_fault_id = 0;
+    uint8_t motor_pair_opposite_id = 0;
+    float motor_pair_loss_pct = 0.0f;
+    float motor_pair_capacity_ratio = 0.0f;
+
     // Geometric-controller gain/tilt scheduling. KP/KV/KR/KO and maximum
     // combined roll/pitch tilt are scheduled; all L1 parameters remain fixed.
     struct GainScheduleSet {
@@ -2067,6 +2084,8 @@ private:
     GainScheduleSet gain_schedule_active = {};
 
     void clear_auto_motor_fault();
+    void reset_motor_pair_mode();
+    void update_motor_pair_mode(bool motor_degradation_active);
     void update_auto_motor_fault_detector(float time_in_this_run);
     void reset_gain_schedule();
     void update_gain_schedule(bool motor_degradation_active);
@@ -2088,7 +2107,8 @@ private:
     VectorN<float,4> motorMixingYawFreeEffectivenessAware(
         VectorN<float,4> thrustMomentCmd,
         uint8_t degraded_motor_id,
-        float estimated_loss_pct);
+        float estimated_loss_pct,
+        uint8_t mirrored_motor_id = 0);
     VectorN<float,4> motorMixing(VectorN<float,4> thrustMomentCmd);
     VectorN<float,4> iterativeMotorMixing(VectorN<float, 4> w_input,
                                            VectorN<float, 4> thrustMomentCmd,
