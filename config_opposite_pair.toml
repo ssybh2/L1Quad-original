@@ -116,7 +116,9 @@ recovery_time_s = 0.100
 min_loss_percent = 0.0
 release_loss_percent = 0.0
 max_residual_ratio = 0.35
-min_roll_pitch_moment_nm = 0.20
+# Minimum observable matched-moment amplitude: signal/noise check, NOT a fault percentage.
+# A smaller threshold increases low-loss sensitivity and may create false positives.
+min_roll_pitch_moment_nm = 0.02
 sigma_filter_alpha = 0.05
 baseline_alpha_fast = 0.02
 baseline_alpha_slow = 0.0005
