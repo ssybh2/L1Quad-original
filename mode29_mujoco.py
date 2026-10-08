@@ -10,6 +10,7 @@ from pathlib import Path
 import mujoco
 import mujoco.viewer
 import numpy as np
+from bounded_allocator import bounded_allocate
 from opposite_pair_sim import (OppositePairExperiment, allocate_opposite_pair,
                                apply_opposite_model_loss)
 from yaw_rate_schedule import (YawRateEnvelope, allocate_pair_yaw_control,
@@ -269,110 +270,15 @@ class Mixer:
         return np.clip(w, 0.0, 100.0)
 
     def allocate_effectiveness_aware(self, cmd, degraded_motor_id, loss_percent):
-        """Allocate a degraded motor while retaining bounded yaw-rate authority.
+        """Bounded allocation with exact physical thrust limits.
 
-        Collective thrust, roll and pitch define a one-dimensional family of
-        actual rotor thrusts. Use that remaining null-space degree of freedom
-        to track as much of the requested yaw moment as the degraded motors can
-        produce, without sacrificing the three primary axes.
+        Protect collective F before roll/pitch, using only remaining authority
+        for yaw. An infeasible wrench is explicitly degraded, NEVER allocated
+        via a clipped pseudoinverse that can double total thrust.
         """
-        if degraded_motor_id not in (1, 2, 3, 4) or not np.isfinite(loss_percent):
-            return self.allocate_yaw_free(cmd)
-
-        eta = np.ones(4, dtype=float)
-        eta[degraded_motor_id-1] = 1.0 - np.clip(float(loss_percent), 0.0, 100.0)/100.0
-        roll = 0.5*self.L*np.array([-1.0, +1.0, +1.0, -1.0])
-        pitch = 0.5*self.D*np.array([+1.0, -1.0, +1.0, -1.0])
-
-        B = np.vstack((np.ones(4), roll, pitch))
-        desired = np.asarray(cmd[:3], dtype=float)
-        max_actual_thrust = eta*self.motor.thrust(100.0)
-
-        try:
-            gram = B @ B.T
-            if abs(float(np.linalg.det(gram))) < 1.0e-12:
-                return self.allocate_yaw_free(cmd)
-            actual_thrust_0 = B.T @ np.linalg.solve(gram, desired)
-        except np.linalg.LinAlgError:
-            return self.allocate_yaw_free(cmd)
-
-        # Null(B) is the yaw-allocation direction. Find its feasible interval
-        # under both the healthy and degraded motor thrust limits.
-        _, _, vh = np.linalg.svd(B)
-        null_direction = vh[-1]
-        s_lo = -float("inf")
-        s_hi = float("inf")
-        for fi, ni, fi_max in zip(actual_thrust_0, null_direction, max_actual_thrust):
-            if abs(float(ni)) < 1.0e-12:
-                if fi < 0.0 or fi > fi_max:
-                    return self.allocate_yaw_free(cmd)
-                continue
-            bound_0 = -fi/ni
-            bound_1 = (fi_max-fi)/ni
-            s_lo = max(s_lo, min(bound_0, bound_1))
-            s_hi = min(s_hi, max(bound_0, bound_1))
-
-        if not np.isfinite(s_lo) or not np.isfinite(s_hi) or s_lo > s_hi:
-            # The primary wrench is itself infeasible. Retain the previous
-            # minimum-norm behavior instead of trading primary authority for yaw.
-            A = B @ np.diag(eta)
-            try:
-                motor_thrust = A.T @ np.linalg.solve(A @ A.T, desired)
-            except np.linalg.LinAlgError:
-                return self.allocate_yaw_free(cmd)
-            w = np.array(
-                [self.motor.w_from_thrust(max(0.0, fi)) for fi in motor_thrust],
-                dtype=float,
-            )
-            return np.clip(w, 0.0, 100.0)
-
-        yaw_sign = np.array([1.0, 1.0, -1.0, -1.0])
-
-        def yaw_moment_at(s):
-            actual_thrust = np.clip(
-                actual_thrust_0 + null_direction*s,
-                0.0,
-                max_actual_thrust,
-            )
-            applied_w = np.array(
-                [self.motor.w_from_thrust(fi) for fi in actual_thrust],
-                dtype=float,
-            )
-            reaction = np.array(
-                [self.motor.moment(wi) for wi in applied_w],
-                dtype=float,
-            )
-            return float(yaw_sign @ reaction)
-
-        yaw_target = float(cmd[3]) if len(cmd) >= 4 and np.isfinite(cmd[3]) else 0.0
-        yaw_lo = yaw_moment_at(s_lo)
-        yaw_hi = yaw_moment_at(s_hi)
-        increasing = yaw_hi >= yaw_lo
-        yaw_target = float(np.clip(yaw_target, min(yaw_lo, yaw_hi), max(yaw_lo, yaw_hi)))
-
-        # The reaction-moment fit is monotonic along this null-space direction.
-        lo, hi = s_lo, s_hi
-        for _ in range(24):
-            mid = 0.5*(lo+hi)
-            yaw_mid = yaw_moment_at(mid)
-            if (yaw_mid < yaw_target) == increasing:
-                lo = mid
-            else:
-                hi = mid
-
-        actual_thrust = np.clip(
-            actual_thrust_0 + null_direction*0.5*(lo+hi),
-            0.0,
-            max_actual_thrust,
-        )
-        motor_thrust = actual_thrust/np.maximum(eta, 1.0e-6)
-        w = np.array(
-            [self.motor.w_from_thrust(max(0.0, fi)) for fi in motor_thrust],
-            dtype=float,
-        )
-        if not np.isfinite(w).all():
-            raise RuntimeError("non-finite effectiveness-aware allocation")
-        return np.clip(w, 0.0, 100.0)
+        w, diag = bounded_allocate(self, cmd, degraded_motor_id, loss_percent)
+        self.last_effectiveness_diag = diag
+        return w
 
 
 def unit_vec(q, q_dot, q_ddot):
