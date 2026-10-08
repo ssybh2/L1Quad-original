@@ -24,8 +24,8 @@ def allocate_opposite_pair(mixer, cmd, failed_motor_id, estimated_loss_percent):
     """
     other = opposite_motor(failed_motor_id)
     loss = float(estimated_loss_percent)
-    if not np.isfinite(loss) or not 0.0 <= loss <= 70.0:
-        raise ValueError("paired loss estimate outside supported interval")
+    if not np.isfinite(loss) or not 0.0 <= loss <= 100.0:
+        raise ValueError("paired loss estimate must be in [0, 100]")
     eta = np.ones(4, dtype=float)
     eta[failed_motor_id - 1] = 1.0 - loss / 100.0
     eta[other - 1] = eta[failed_motor_id - 1]
@@ -37,8 +37,12 @@ def allocate_opposite_pair(mixer, cmd, failed_motor_id, estimated_loss_percent):
     ))
     A = B @ np.diag(eta)
     gram = A @ A.T
-    if not np.isfinite(gram).all() or abs(np.linalg.det(gram)) <= 1.0e-9:
-        raise RuntimeError("opposite-pair allocation singular")
+    # The 100%+100% opposite pair leaves only two live actuator columns.
+    # Such a configuration cannot independently track F, Mx and My.
+    if not np.isfinite(gram).all() or np.linalg.matrix_rank(A, tol=1.0e-8) < 3:
+        raise RuntimeError("opposite-pair allocator rank-deficient: cannot independently control F/Mx/My")
+    if np.linalg.cond(gram) > 1.0e5:
+        raise RuntimeError("opposite-pair allocator ill-conditioned: excessive control amplification")
     desired = np.asarray(cmd[:3], dtype=float)
     f_nominal = A.T @ np.linalg.solve(gram, desired)
     w = np.array(
@@ -80,13 +84,13 @@ class OppositePairExperiment:
         self.mass = float(vehicle["mass_kg"])
         self.gravity = float(vehicle["gravity_mps2"])
         self.max_tilt_deg = float(max_tilt_deg)
-        self.max_loss = float(cfg.get("max_loss_percent", 70.0))
+        self.min_condition = float(cfg.get("min_allocation_reciprocal_condition", 1.0e-5))
         self.max_bias = float(cfg.get("max_estimate_bias_percent", 8.0))
         self.min_margin = float(cfg.get("min_static_thrust_margin", 1.5))
         self.max_spin = float(cfg.get("max_body_yaw_rate_rps", 4.0))
         self.max_xy = float(cfg.get("max_xy_error_m", 0.5))
         self.max_z = float(cfg.get("max_z_error_m", 0.4))
-        if self.enabled and (not 0 < self.max_loss <= 70 or
+        if self.enabled and (not (0 < self.min_condition <= 1) or
                              min(self.max_spin, self.max_xy, self.max_z, self.min_margin) <= 0):
             raise ValueError("invalid opposite_pair safety configuration")
         self.active = False
@@ -154,15 +158,34 @@ class OppositePairExperiment:
                 return
             if loss < 60.0 or detector.residual_ratio > 0.35:
                 return
-        if loss > self.max_loss or injector.loss_percent > self.max_loss:
+        if not (0.0 <= loss <= 100.0) or not (0.0 <= injector.loss_percent <= 100.0):
             self.inhibited = True
-            self.reason = "partial-actuator experiment limited to <=70% paired loss"
+            self.reason = "loss must be in [0,100]%"
+            return
+        if loss <= 0.0:
+            # An exact 0% injection creates no faulty motor to identify.
             return
         if self.source == "fdi" and abs(loss - injector.loss_percent) > self.max_bias:
             self.inhibited = True
             self.reason = "FDI estimate disagrees with known injected loss"
             return
         eta = 1.0 - loss/100.0
+        # Observability is independent from actuator feasibility. Check
+        # rank/conditioning, not an arbitrary loss-percentage cutoff.
+        L = float(getattr(self, "L", 0.28))
+        D = float(getattr(self, "D", 0.28))
+        geom = np.vstack((np.ones(4),
+            0.5 * L * np.array([-1., 1., 1., -1.]),
+            0.5 * D * np.array([1., -1., 1., -1.])))
+        effectiveness = np.ones(4)
+        effectiveness[estimated_motor_id - 1] = eta
+        effectiveness[opposite_motor(estimated_motor_id) - 1] = eta
+        allocation = geom @ np.diag(effectiveness)
+        if (np.linalg.matrix_rank(allocation, tol=1.0e-8) < 3 or
+                1.0 / np.linalg.cond(allocation @ allocation.T) < self.min_condition):
+            self.inhibited = True
+            self.reason = "insufficient independent control authority (rank/condition)"
+            return
         required = (self.mass * self.gravity /
                     max(math.cos(math.radians(self.max_tilt_deg)), 0.1))
         # w=80 corresponds to the source calibration's 1800us measured range.
