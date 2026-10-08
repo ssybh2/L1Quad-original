@@ -1556,7 +1556,7 @@ def run(cfg):
         "pair_controller_armed","pair_mirror_applied_pct","pair_mirror_target_pct",
         "pair_full_wrench_feasible_stable","pair_retry_count","pair_retry_after_s",
         "pair_primary_interval_width_n","pair_rollback_count",
-        "pair_position_yaw_scale",
+        "pair_position_yaw_scale","pair_yaw_backoff_count",
         "pair_yaw_cap_deg_s","pair_yaw_target_deg_s","pair_yaw_hard_abort_rps",
         "pair_yaw_brake_cmd_nm","pair_yaw_allocated_nm",
         "pair_yaw_min_nm","pair_yaw_max_nm","pair_yaw_saturated",
@@ -1989,6 +1989,7 @@ def run(cfg):
                     "pair_primary_interval_width_n":pair.primary_interval_width_n,
                     "pair_rollback_count":pair.mirror_rollback_count,
                     "pair_position_yaw_scale":pair.position_priority_scale,
+                    "pair_yaw_backoff_count":pair.yaw_backoff_count,
                     "pair_yaw_cap_deg_s":(
                         yaw_envelope.limit_deg_s(pair.estimated_loss_percent)
                         if pair.active and yaw_envelope.enabled else 0.0
