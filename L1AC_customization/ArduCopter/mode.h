@@ -2060,6 +2060,12 @@ private:
     // Kept separate from legacy FDI when M29_BALLOC=0.
     uint32_t motor_fdi_confirmed_at_ms = 0U;
     uint32_t motor_fdi_guarded_cycles = 0U;
+    // Consecutive saturated ticks: do not confuse unobservable effectiveness
+    // with 100% failure. Used for HIL telemetry and rate-limited warning.
+    uint32_t motor_fdi_saturation_streak_samples = 0U;
+    // Detect large changes in the actual nominal command used for FDI.
+    float motor_fdi_last_excitation_w = 0.0f;
+    bool motor_fdi_last_excitation_valid = false;
     float motor_fdi_raw_innovation_pct = 0.0f;
     float motor_fdi_applied_delta_pct = 0.0f;
     float motor_fdi_excitation_w = 0.0f;
