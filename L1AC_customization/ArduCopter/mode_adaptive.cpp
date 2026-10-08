@@ -1538,6 +1538,36 @@ void ModeAdaptive::run()
                        (double)(sigma_m_hat_prev[2]),
                        (double)(sigma_m_hat_prev[3]));
 
+    // L1PR keeps the paired experiment observable alongside L1DG (injected
+    // truth), L1FD (blind FDI) and L1GS (active scheduled gains).
+    Vector3f pair_log_position;
+    const bool pair_log_position_ok =
+        ahrs.get_relative_position_NED_origin(pair_log_position) &&
+        mode29_finite(pair_log_position);
+    const Vector3f pair_log_gyro = AP::ahrs().get_gyro();
+    const float pair_log_xy = pair_log_position_ok ?
+        sqrtf(sq(pair_log_position.x) + sq(pair_log_position.y)) : -1.0f;
+    const float pair_log_z = pair_log_position_ok ?
+        fabsf(pair_log_position.z + takeoffAlt) : -1.0f;
+    const float pair_log_yaw_rate =
+        mode29_finite(pair_log_gyro) ? pair_log_gyro.z : 0.0f;
+    AP::logger().Write("L1PR",
+                       "enabled,active,lock,fmotor,omotor,loss,margin,rate,xyerr,zerr,bias",
+                       "BBBBBffffff",
+                       (uint8_t)motor_pair_enabled_this_run,
+                       (uint8_t)motor_pair_active,
+                       (uint8_t)motor_pair_inhibited,
+                       motor_pair_fault_id,
+                       motor_pair_opposite_id,
+                       (double)motor_pair_loss_pct,
+                       (double)motor_pair_capacity_ratio,
+                       (double)pair_log_yaw_rate,
+                       (double)pair_log_xy,
+                       (double)pair_log_z,
+                       (double)(motor_fault_loss_estimate_pct -
+                                (motor_degradation_active ?
+                                 motor_degradation_loss_pct : 0.0f)));
+
     if (motors->armed()) // only command the motor PWM when the vehicle is armed.
     {
         motors->rc_write(0, 1000 + motorEnable * 10 * motorPWM[0]); // manual set motor speed: PWM_MIN/MAX has been forced to 1000/2000
