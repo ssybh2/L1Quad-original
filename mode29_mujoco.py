@@ -1290,6 +1290,21 @@ class GainScheduler:
             "max_tilt_deg": float(safety["max_tilt_deg"]),
         }
         self.anchors = {0: self._copy(self.base)}
+        # The user can independently tune 0% just like 10%..100%.
+        # If absent, use historical healthy baseline [gains]/[safety].
+        zero = cfg.get("loss_0", {})
+        self.anchors[0] = {
+            "kp": np.asarray(zero.get("kp", self.base["kp"]), dtype=float),
+            "kv": np.asarray(zero.get("kv", self.base["kv"]), dtype=float),
+            "kr": np.asarray(zero.get("kr", self.base["kr"]), dtype=float),
+            "ko": np.asarray(zero.get("ko", self.base["ko"]), dtype=float),
+            "max_tilt_deg": float(zero.get("max_tilt_deg", self.base["max_tilt_deg"])),
+        }
+        for key in ("kp", "kv", "kr", "ko"):
+            if self.anchors[0][key].shape != (3,) or not np.isfinite(self.anchors[0][key]).all():
+                raise ValueError(f"loss_0.{key} must contain 3 finite gains")
+        if not 5.0 <= self.anchors[0]["max_tilt_deg"] <= 90.0:
+            raise ValueError("loss_0.max_tilt_deg must be [5,90]; control clips to 60")
         # Existing 50..100 anchors are preserved. Missing intermediate anchors
         # inherit the 0..50 straight line until each 10% point is tuned.
         fifty = cfg.get("loss_50", {})
@@ -1302,7 +1317,7 @@ class GainScheduler:
         }
         for loss in range(10, 101, 10):
             if loss < 50:
-                defaults = self._interpolate(self.base, default_50, loss / 50.0)
+                defaults = self._interpolate(self.anchors[0], default_50, loss / 50.0)
             else:
                 defaults = self.base
             anchor = cfg.get(f"loss_{loss}", {})
