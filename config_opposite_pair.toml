@@ -1,5 +1,5 @@
 # EXPERIMENTAL ONLY — matched opposite rotor derating, self-spin, NED 0,0,-1.
-# This file intentionally uses 2026-10-06 FDI thresholds and 60% gain anchor.
+# Any injected loss from 0 to 100% is accepted. FDI and controllability are separate questions.
 # Do not use these values as proven physical/real-flight parameters.
 # Yaw nullspace damping and hard yaw clipping are not applied when pair mode is enabled.
 # Softdrone Mode29 MuJoCo configuration
@@ -110,11 +110,11 @@ request_yaw_free = false
 enabled = true
 confirm_time_s = 0.060
 recovery_time_s = 0.100
-# FDI confirmation threshold follows the frozen Oct 6 firmware (60%).
-# A simulated 60% fault may NOT be confirmed due to observer bias; use
-# --pair-oracle *only* to isolate the control-allocation experiment.
-min_loss_percent = 60.0
-release_loss_percent = 35.0
+# For arbitrary loss fractions the detector considers evidence quality and
+# force/moment observability, not a hard-coded percentage of motor degradation.
+# Zero loss represents a healthy motor and cannot generate a detectable failure.
+min_loss_percent = 0.0
+release_loss_percent = 0.0
 max_residual_ratio = 0.35
 min_roll_pitch_moment_nm = 0.20
 sigma_filter_alpha = 0.05
@@ -195,7 +195,7 @@ max_tilt_deg = 30.0
 [opposite_pair]
 enabled = true
 source = "fdi"  # fdi=blind estimator; oracle=ground-truth simulation diagnostic only
-max_loss_percent = 70.0
+min_allocation_reciprocal_condition = 1.0e-5
 max_estimate_bias_percent = 8.0
 min_static_thrust_margin = 1.5
 max_body_yaw_rate_rps = 4.0
