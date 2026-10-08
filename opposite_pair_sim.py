@@ -97,6 +97,7 @@ class OppositePairExperiment:
         self.static_thrust_margin = 0.0
         self.reason = ""
         self.activated_at_s = None
+        self.disengaged_at_s = None
 
     def update(self, t, measured_pos, measured_omega, target_altitude,
                original_fault_active, injector, detector):
@@ -115,7 +116,21 @@ class OppositePairExperiment:
             if guard or not original_fault_active or (self.source == "fdi" and not detector.confirmed):
                 self.active = False
                 self.inhibited = True
-                self.reason = "pair disengaged: fault ended, detector lost or state guard exceeded"
+                self.disengaged_at_s = float(t)
+                if not original_fault_active:
+                    self.reason = "injected fault ended"
+                elif self.source == "fdi" and not detector.confirmed:
+                    self.reason = "FDI confirmation lost"
+                elif not finite:
+                    self.reason = "non-finite position or angular rate"
+                elif xy_error > self.max_xy:
+                    self.reason = f"XY error {xy_error:.3f} m > {self.max_xy:.3f} m"
+                elif z_error > self.max_z:
+                    self.reason = f"height error {z_error:.3f} m > {self.max_z:.3f} m"
+                elif yaw_rate > self.max_spin:
+                    self.reason = f"yaw rate {yaw_rate:.3f} rad/s > {self.max_spin:.3f} rad/s"
+                else:
+                    self.reason = "unknown paired-fault disengagement"
             return
         if self.inhibited or not original_fault_active:
             return
