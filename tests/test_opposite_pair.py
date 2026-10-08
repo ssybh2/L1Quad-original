@@ -67,6 +67,9 @@ class OppositePairTests(unittest.TestCase):
             loss_estimate_percent=62., residual_ratio=.1
         )
         pair.update(5., [0., 0., -1.], [0., 0., 0.], 1., True, fault, detector)
+        self.assertFalse(pair.active, "FDI must settle before synthetic mirroring")
+        self.assertTrue(pair.retry_pending)
+        pair.update(5.2, [0., 0., -1.], [0., 0., 0.], 1., True, fault, detector)
         self.assertTrue(pair.active)
         self.assertEqual(pair.opposite_motor_id, 2)
         self.assertEqual(pair.estimated_loss_percent, 62.)
@@ -122,7 +125,27 @@ class OppositePairTests(unittest.TestCase):
             loss_estimate_percent=75., residual_ratio=.1
         )
         pair.update(5., [0., 0., -1.], [0., 0., 0.], 1., True, fault, detector)
+        pair.update(5.2, [0., 0., -1.], [0., 0., 0.], 1., True, fault, detector)
         self.assertTrue(pair.active)
+
+    def test_transient_underestimate_is_retryable(self):
+        pair = OppositePairExperiment({"enabled": True},
+                                      {"mass_kg": 1., "gravity_mps2": 9.8},
+                                      ToyMotor(), 30.)
+        fault = SimpleNamespace(motor_id=1, loss_percent=70.)
+        detector = SimpleNamespace(confirmed=True, detected_id=1,
+                                   loss_estimate_percent=41., residual_ratio=.1)
+        pair.update(5.0, [0., 0., -1.], [0., 0., 0.], 1., True, fault, detector)
+        self.assertFalse(pair.active)
+        self.assertFalse(pair.inhibited, "early observer bias must not permanently block pair")
+        self.assertTrue(pair.retry_pending)
+        detector.loss_estimate_percent = 70.
+        pair.update(5.2, [0., 0., -1.], [0., 0., 0.], 1., True, fault, detector)
+        self.assertFalse(pair.active)
+        pair.update(5.4, [0., 0., -1.], [0., 0., 0.], 1., True, fault, detector)
+        self.assertTrue(pair.active)
+        self.assertEqual(pair.failed_motor_id, 1)
+        self.assertEqual(pair.opposite_motor_id, 2)
 
     def test_exact_zero_injection_is_no_fault(self):
         pair = OppositePairExperiment({"enabled": True, "source": "oracle"},
