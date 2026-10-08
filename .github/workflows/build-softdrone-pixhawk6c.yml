@@ -6,6 +6,7 @@ on:
       - softdrone
       - feature/mode29-fdi-recovery
       - feature/mode29-position-gain-schedule
+      - feature/mode29-from-60pct-20261006
   workflow_dispatch:
 
 jobs:
