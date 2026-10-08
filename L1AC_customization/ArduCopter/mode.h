@@ -2063,6 +2063,8 @@ private:
     // Consecutive saturated ticks: do not confuse unobservable effectiveness
     // with 100% failure. Used for HIL telemetry and rate-limited warning.
     uint32_t motor_fdi_saturation_streak_samples = 0U;
+    // The loss at confirmation sets a severity-scaled recovery hysteresis.
+    float motor_fdi_confirmed_loss_pct = 0.0f;
     // Detect large changes in the actual nominal command used for FDI.
     float motor_fdi_last_excitation_w = 0.0f;
     bool motor_fdi_last_excitation_valid = false;
