@@ -18,9 +18,46 @@ The controller deliberately overrides only RC channels 9..12 through MAVLink2 `R
 | RC11 | thrust-effectiveness loss | 1000=0%, 2000=100% |
 | RC12 | yaw policy | 1000=keep yaw, 2000=yaw-free |
 
-The matching firmware branch is:
+The matching **2026-10-08 experimental firmware** branch is:
 
-`feature/mode29-fdi-recovery`
+`feature/mode29-pixhawk-next-from-20261006`
+
+The immutable 2026-10-06 tested baseline remains:
+`milestone/orangepi-mode29-20261006-no-yaw-protection`
+(commit `2c606d7e532c54416fc850995449b9acfd6f6a1b`).
+
+## Opposite-motor matching experiment (simulator / propellers removed first)
+
+This experimental feature is disabled in both existing ordinary YAML profiles:
+`M29_PAIR_EN: 0`. It requires the matching new Pixhawk firmware.
+
+A **separate**, explicitly opt-in profile is:
+`orangepi/configs/mode29_opposite_pair_experiment.yaml`.
+It sets `M29_PAIR_EN: 1` and retains the 2026-10-06 60% gain
+anchor. The mode setting `M29_GS_MODE: 1` (injected-loss oracle
+for **gain scheduling only**) keeps the FDI motor and percentage identification
+fully independent; switch to `2` only in later validated simulations.
+The fault detector must still confirm the fault before any opposite motor
+is derated.
+
+Review the changes **while disarmed and propellers removed**:
+
+```bash
+python3 orangepi/apply_flight_config.py \
+  orangepi/configs/mode29_opposite_pair_experiment.yaml --dry-run
+```
+
+Do NOT apply this experimental profile to a free-flying aircraft based
+only on the repository build. Pair activation is guarded and can
+abort, but loss of position and uncontrolled spin remain possible.
+The normal/validated profile explicitly sets `M29_PAIR_EN=0`.
+
+Diagnose test logs `L1DG` (injection truth), `L1FD` (observer),
+`L1GS` (scheduled gain), and `L1PR` (pair state and position/yaw
+errors). This experiment does not include any of the October 7
+`M29_YAW_KD`, `M29_YAW_RMAX`, or `M29_YAW_MMAX` changes.
+
+
 
 The runtime motor-loss command accepts any value from 0% to 100%. RC11 maps
 linearly across that full range; e.g. 5% -> 1050 us, 50% -> 1500 us,
