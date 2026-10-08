@@ -1114,6 +1114,26 @@ class BlindMotorFaultDetector:
         self.confirm_count = 0
         self.recovery_count = 0
 
+    def begin_cooldown(self, t):
+        """Re-anchor detector when the synthetic second loss disengages.
+
+        During cooldown no single-fault inference is valid because the
+        two-motor residual and topology transients contaminate the history.
+        """
+        self.cooldown_until_s = max(self.cooldown_until_s,
+                                    float(t) + self.cooldown_seconds)
+        self.confirmed = False
+        self.detected_id = 0
+        self._reset_candidate()
+        self.loss_estimate_percent = 0.0
+        self.residual_ratio = 1.0
+        self.prev_cmd = None
+        self.prev_w_nominal = None
+        self.sigma_baseline = self.sigma_filtered.copy()
+        self.loss_instant_percent = 0.0
+        self.loss_rate_pp_s = 0.0
+        self.prev_estimate_for_rate = 0.0
+
     def update(self, t, measured_omega, freeze_confirmed_estimate=False):
         omega = np.asarray(measured_omega, dtype=float)
         if self.prev_omega is None:
@@ -1624,11 +1644,15 @@ def run(cfg):
                         freeze_confirmed_estimate=yaw_rate_limiter_active or pair.active,
                     )
                 fault_active_now = fault.is_active(data.time)
+                was_pair_active = pair.active
                 pair.update(
                     data.time, meas_pos, meas_Omega,
                     float(traj["takeoff_altitude_m"]), fault_active_now,
                     fault, detector, yaw_envelope=yaw_envelope,
                 )
+                if was_pair_active and not pair.active:
+                    detector.begin_cooldown(data.time)
+                    l1_hold_until = data.time + l1.topology_transition_hold
                 candidate_protection_active = (
                     not detector.confirmed
                     and detector.candidate_id in (1, 2, 3, 4)
@@ -1693,11 +1717,10 @@ def run(cfg):
                     )
                     cmd = out["cmd"].copy()
                     if yaw_free_active:
-                        if pair.enabled:
-                            # This does not hold a yaw *heading*. When paired,
-                            # regulate body yaw speed through actuator reaction
-                            # torque while keeping position/Roll/Pitch primary.
-                            cmd[3] = yaw_feedback_request if pair.active else 0.0
+                        if pair.enabled and pair.active:
+                            # Yaw heading remains free; track bounded nonzero
+                            # self-spin using physical reaction torque.
+                            cmd[3] = yaw_feedback_request
                         elif detector.confirmed or candidate_protection_active:
                             # Keep yaw angle free during the fault and damp only
                             # its rate through the allocator's null-space authority.
@@ -1759,11 +1782,6 @@ def run(cfg):
                             protection_motor,
                             protection_loss,
                         )
-                    elif pair.enabled and detector.yaw_free_latched:
-                        # After synthetic pairing ends, preserve yaw freedom
-                        # without restoring the old null-space damping.
-                        allocator_mode = "pair_fallback_yaw_free"
-                        w_cmd = mixer.allocate_yaw_free(total_cmd)
                     elif detector.yaw_free_latched and detector.recovered_at_s is not None:
                         # The source branch deliberately keeps yaw angle free
                         # after recovery. MuJoCo has no aerodynamic body drag,
@@ -1775,6 +1793,16 @@ def run(cfg):
                             detector.post_recovery_max_yaw_moment,
                         ))
                         allocator_mode = "post_recovery_yaw_rate_damped"
+                        w_cmd = mixer.allocate(total_cmd)
+                    elif pair.enabled and detector.yaw_free_latched:
+                        # Pair is disabled or cooling down: yaw is still free
+                        # but physical yaw-rate damping must remain available.
+                        total_cmd[3] = float(np.clip(
+                            -detector.post_recovery_yaw_rate_damping*meas_Omega[2],
+                            -detector.post_recovery_max_yaw_moment,
+                            detector.post_recovery_max_yaw_moment,
+                        ))
+                        allocator_mode = "pair_fallback_yaw_rate_damped"
                         w_cmd = mixer.allocate(total_cmd)
                     elif yaw_free_active:
                         allocator_mode = "yaw_free"
