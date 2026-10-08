@@ -43,6 +43,70 @@ def replay_confirmed_fdi(initial, innovations, pair=False):
     return value, accepted
 
 
+
+def guarded_timeline(initial, events):
+    """Independent time-stepped model for *transition invalidation*.
+
+    Each event: (ms, innovation_fraction, residual_fit, nominal_w,
+                 primary_saturated, paired, staged_recovery).
+    A timestamp denotes the *last* measurement invalidation, not a
+    fixed delay only at first detection.
+    """
+    value = initial
+    last_invalidation_ms = 0.0
+    last_w = None
+    streak = 0
+    prev_sign = 0
+    accepted_times = []
+    saturation_streak = 0
+    for (ms, innovation, fit, nominal_w, saturated, paired, recovering) in events:
+        if saturated or paired or recovering:
+            last_invalidation_ms = ms
+            last_w = None
+            prev_sign = 0
+            streak = 0
+            saturation_streak = saturation_streak + 1 if saturated else 0
+            continue
+        saturation_streak = 0
+        if last_w is not None and abs(nominal_w - last_w) >= 12.0:
+            last_invalidation_ms = ms
+            streak = 0
+            prev_sign = 0
+        last_w = nominal_w
+        if ms - last_invalidation_ms < 125.0:
+            continue
+        if not math.isfinite(innovation) or abs(innovation) > 1.0:
+            continue
+        if nominal_w < 16.0 or not math.isfinite(fit) or fit > 0.35:
+            continue
+        if abs(innovation) < 0.03:
+            streak = 0
+            prev_sign = 0
+            continue
+        sign = 1 if innovation > 0 else -1
+        streak = streak + 1 if sign == prev_sign else 1
+        prev_sign = sign
+        if streak < 6:
+            continue
+        dv = min(0.075, max(-0.25, innovation))
+        value = max(0.0, min(100.0, value + dv))
+        accepted_times.append(ms)
+    return value, accepted_times
+
+
+def hil_candidate(loss_fraction, fit_ratio, nominal_w, rp_moment, samples,
+                  bounded=True, pair=False):
+    """HIL numerical contract for the additional low-severity study."""
+    threshold = 0.0 if pair else (0.15 if bounded else 0.60)
+    weak = bounded and loss_fraction < 0.60
+    moment_floor = 0.02 if pair else (0.10 if bounded else 0.20)
+    fit_max = 0.25 if weak else 0.35
+    count_min = 40 if weak else 24
+    return (loss_fraction > threshold and rp_moment >= moment_floor and
+            fit_ratio <= fit_max and (not weak or nominal_w >= 16.0) and
+            samples >= count_min)
+
+
 class FdiAntiWindupTests(unittest.TestCase):
     def test_source_is_hil_gated(self):
         self.assertIn("if (motor_bounded_enabled_this_run) {", CODE)
@@ -56,6 +120,17 @@ class FdiAntiWindupTests(unittest.TestCase):
         self.assertIn(
             "motor_bounded_enabled_this_run ? motor_fault_confirmed :", CODE
         )
+        self.assertIn("motor_fdi_saturation_streak_samples", STATE)
+        self.assertIn("motor_fdi_last_excitation_valid", STATE)
+        self.assertIn("motor_fdi_confirmed_at_ms = AP_HAL::millis();", CODE)
+        self.assertIn("motor_fdi_saturation_streak_samples >= 200U", CODE)
+        self.assertIn("EXCITATION_STEP_W=12.0f", CODE)
+        self.assertIn("motor_fdi_gate_code = 12U", CODE)
+        self.assertIn('"raw,step,ratio,w,gate,held,stall,est"', CODE)
+        self.assertIn('"ffffBIIf"', CODE)
+        self.assertIn("weak_hil_candidate ? 40U : MOTOR_FDI_CONFIRM_SAMPLES", CODE)
+        self.assertIn("weak_hil_candidate ? 0.25f : MOTOR_FDI_MAX_RESIDUAL_RATIO", CODE)
+        self.assertIn("motor_bounded_enabled_this_run ? 0.15f : MOTOR_FDI_MIN_LOSS_FRACTION", CODE)
 
     def test_log67_delayed_residual_no_immediate_overestimate(self):
         # The old integrator 0.05 * 0.7 * 100 per 400-Hz step would
@@ -91,6 +166,45 @@ class FdiAntiWindupTests(unittest.TestCase):
         value, accepted = replay_confirmed_fdi(70, recovery)
         self.assertLess(value, 40)
         self.assertGreater(accepted, 0)
+
+    def test_saturated_estimate_unobservable_until_125ms_after_clear(self):
+        events = []
+        for i in range(400):
+            ms = i * 2.5
+            events.append((ms, .8, .1, 50, 150 <= i < 240, False, False))
+        _, accepted = guarded_timeline(70, events)
+        self.assertTrue(accepted)
+        self.assertTrue(all(t >= 240 * 2.5 + 125 for t in accepted
+                            if t >= 240 * 2.5))
+        self.assertFalse(any(150 * 2.5 <= t < 240 * 2.5 + 125
+                             for t in accepted))
+
+    def test_pair_exit_restarts_settling_window(self):
+        events = [(i * 2.5, .6, .1, 45, False, 60 <= i < 120, False)
+                  for i in range(260)]
+        _, accepted = guarded_timeline(68, events)
+        self.assertTrue(any(t > 120 * 2.5 + 125 for t in accepted))
+        self.assertFalse(any(60 * 2.5 <= t < 120 * 2.5 + 125
+                             for t in accepted))
+
+    def test_large_excitation_step_restarts_observer_wait(self):
+        events = [(i * 2.5, .7, .1, 50 if i < 160 else 70,
+                   False, False, False) for i in range(300)]
+        _, accepted = guarded_timeline(65, events)
+        self.assertTrue(any(t < 160 * 2.5 for t in accepted))
+        self.assertFalse(any(160 * 2.5 <= t < 160 * 2.5 + 125
+                             for t in accepted))
+        self.assertTrue(any(t >= 160 * 2.5 + 125 for t in accepted))
+
+    def test_low_loss_requires_confidence_and_persistence(self):
+        self.assertFalse(hil_candidate(.15, .08, 45, .20, 60))
+        self.assertFalse(hil_candidate(.30, .30, 45, .20, 60))
+        self.assertFalse(hil_candidate(.30, .10, 14, .20, 60))
+        self.assertFalse(hil_candidate(.30, .10, 45, .20, 39))
+        self.assertTrue(hil_candidate(.30, .10, 45, .20, 40))
+        self.assertFalse(hil_candidate(.30, .10, 45, .20, 40,
+                                       bounded=False))
+        self.assertTrue(hil_candidate(.70, .28, 45, .20, 24))
 
 
 if __name__ == "__main__":
