@@ -87,12 +87,30 @@ def main():
         if cool:
             print("FDI recovery cooldown observed {:.3f}s..{:.3f}s".format(
                 number(cool[0], "t"), number(cool[-1], "t")))
-        recovery_confirmed = [
-            r for r in rows
-            if number(r, "t") > number(injected[-1], "t") + 0.01
-            and number(r, "fdi_state", 0) == 2
+        # A correctly latched FDI may remain confirmed briefly after the
+        # injected fault ends. This is normal recovery delay, NOT a fresh
+        # healthy-motor false confirmation. Track 2->0->2 after the event.
+        release_t = number(injected[-1], "t")
+        states_after = [r for r in rows if number(r, "t") > release_t + 0.01]
+        clear_after_release = False
+        reconditions = []
+        for r in states_after:
+            state = int(number(r, "fdi_state", 0))
+            if state != 2:
+                clear_after_release = True
+            elif clear_after_release:
+                if not reconditions:
+                    reconditions.append(number(r, "t"))
+                clear_after_release = False
+        initial_recovery_lag = [
+            r for r in states_after
+            if number(r, "fdi_state", 0) == 2
+            and not reconditions
         ]
-        print("Post-injection erroneous FDI-confirmed samples:", len(recovery_confirmed))
+        print("FDI fresh confirmations AFTER first clear:", len(reconditions),
+              "at", reconditions[:8])
+        print("Initial post-release confirmed samples (recovery lag):",
+              len(initial_recovery_lag))
 
     stopped = [r for r in rows if r.get("pair_guard_reason")]
     if stopped:
