@@ -112,6 +112,23 @@ def main():
         print("Initial post-release confirmed samples (recovery lag):",
               len(initial_recovery_lag))
 
+    # Distinguish a *committed* mirrored reduction from merely arming the
+    # experimental state machine. This helps diagnose delayed re-engagement.
+    armed = [r for r in rows if number(r, "pair_controller_armed", 0) > .5]
+    if armed:
+        print(f"Pair controller armed at: {number(armed[0], 't'):.3f}s")
+        applied = [number(r, "pair_mirror_applied_pct", 0.) for r in rows]
+        print(f"Maximum ACTUAL opposite derating: {max(applied):.2f}%")
+        print(f"Maximum FDI target opposite derating: "
+              f"{max(number(r, 'pair_mirror_target_pct', 0.) for r in rows):.2f}%")
+        print("Longest continuous full-wrench-feasible windows are gated by "
+              "feasible_hold_s; zero mirror means no artificial second failure.")
+    retries = max(number(r, "pair_retry_count", 0.) for r in rows)
+    rollback = max(number(r, "pair_rollback_count", 0.) for r in rows)
+    yaw_backoffs = max(number(r, "pair_yaw_backoff_count", 0.) for r in rows)
+    print(f"Temporary pair retries={int(retries)}, "
+          f"wrench rollbacks={int(rollback)}, yaw backoffs={int(yaw_backoffs)}")
+
     stopped = [r for r in rows if r.get("pair_guard_reason")]
     if stopped:
         print(f"Pair disengagement reason: {stopped[-1]['pair_guard_reason']}")
