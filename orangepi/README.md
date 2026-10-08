@@ -18,9 +18,15 @@ The controller deliberately overrides only RC channels 9..12 through MAVLink2 `R
 | RC11 | thrust-effectiveness loss | 1000=0%, 2000=100% |
 | RC12 | yaw policy | 1000=keep yaw, 2000=yaw-free |
 
-The matching firmware branch is:
+The matching **ongoing development** firmware branch is:
 
-`feature/mode29-fdi-recovery`
+`feature/mode29-from-60pct-20261006`
+
+The frozen 2026-10-06 flight-test pairing of Pixhawk firmware and Orange Pi
+scripts/configs is in `milestone/mode29-60pct-validated-20261006`, exact commit
+`2c606d7e532c54416fc850995449b9acfd6f6a1b`.
+Do not use the later 2026-10-07 experiments as the starting point for new work.
+See `docs/MODE29_20261006_BASELINE_AND_RESTART.md`.
 
 The runtime motor-loss command accepts any value from 0% to 100%. RC11 maps
 linearly across that full range; e.g. 5% -> 1050 us, 50% -> 1500 us,
