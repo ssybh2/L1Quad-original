@@ -1,92 +1,120 @@
-# Pixhawk 6C Mini — Mode29 bounded allocator, **bench/HIL-only** integration
+# Mode29 Pixhawk6C HIL-only port: bounded allocation, progressive pairing and yaw recovery
 
-## Scope and safety
-This is a separately gated **research** firmware derived from
-`feature/mode29-pixhawk-next-from-20261006`. It does **not** replace
-`milestone/mode29-60pct-validated-20261006`, any older flyable image or
-the Orange Pi branch. The MuJoCo 80%/90% tests still fail strict full-cycle
-recovery safety conditions. **The binary is NOT validated for propeller-on
-flight or intentional motor failures in flight.**
+Branch: `feature/mode29-bounded-hil-20261008`. Separate from all frozen
+2026-10-06 flight firmware. **Code compilation does not constitute
+flight-safety validation. NOT APPROVED for propeller-on fault injections.**
 
-## Existing runtime protocol is retained
-The existing sequence and controller entry are unchanged:
-1. Arm using pilot safety procedures;
-2. Mode29 enters, validates navigation/origin and tracks the fixed NED
-   target `(0,0,-M29_TKOFF_ALT)` (usually `(0,0,-1)`);
-3. Existing Orange Pi MAVLink RC9..RC12 commands can emulate a fault
-   after `M29_TKOFF_T + M29_SETTLE_T`;
-4. 500-ms derating command watchdog, Mode29/disarm cleanup and existing
-   RC override release stay in place.
+## Existing experimental workflow (interface unchanged)
 
-**These protocol steps are documented for interface compatibility;
-do not perform step 3 with propellers installed using this HIL binary.**
+The existing Mode29 entry validation, Arm -> Mode29 (NED hover target
+`(0,0,-M29_TKOFF_ALT)`), takeoff/settle gate, Orange Pi's RC9..12
+MAVLink single-motor injection/disable command, RC override watchdog and
+motor ordering M1..M4 are retained. Only use with **motor-unpowered** HIL,
+software-only injection, or propeller-free bench interfaces during validation.
 
-## Migrated algorithm, and its limitations
+## Experiment options (disabled by default)
 
-- `M29_BALLOC=0` (default): keep all existing allocation paths.
-- `M29_BALLOC=1` (disarmed setting for HIL only): use a static thrust-domain
-  allocator constrained by the **actual motor effectiveness caps**.
-  Exact priority: (1) collective F clamped only to achievable sum of caps;
-  (2) roll and pitch projected onto a convex reachable moment polygon at
-  that fixed F; (3) yaw receives only the leftover actuator nullspace.
-- The allocator is a fixed-size C++ implementation (no heap allocations)
-  using the existing real Softdrone 6S motor model and 0–100 command range.
-  Fault loss is continuous 0–100%, any one motor 1–4.
-- If the prior command was physically unattainable, already-confirmed
-  blind FDI severity is frozen rather than interpreting a saturated
-  allocation residual as a new failure. The recovered confidence can
-  remain uncertain during prolonged saturation.
-- FDI innovations inconsistent with the physical range of a single motor
-  are not integrated into the severity estimate while this feature is
-  enabled.
-- New logger record `L1BA` fields:
-  `ena` (opt-in status), `sat` (requested F/Mx/My unattainable),
-  `Freq` (requested collective [N]), `Fpred` (bounded predicted
-  collective [N]), `Er`/`Ep` (roll/pitch tracking errors [N·m]),
-  `Freeze` (FDI frozen-cycle count).
+- `M29_BALLOC=0`: original firmware allocator and pairing behavior.
+- `M29_BALLOC=1, M29_PAIR_EN=0`: bounded collective-first, roll/pitch-second,
+  yaw-last allocator, with blind FDI freeze on actuator saturation and staged
+  injected-loss recovery.
+- `M29_BALLOC=1, M29_PAIR_EN=1`: additionally enables the new experimental
+  dynamic opposite-motor matching state machine (see below). This is **NOT**
+  the original immediate-and-permanently-inhibited pairing logic.
+- `M29_PAIR_EN=1, M29_BALLOC=0`: legacy experiment unchanged.
 
-## NOT yet migrated / reasons for blocking
+Only the real Softdrone motor-model build supports the new allocator.
+No special loss percentage is coded: input is continuously valued
+0..100% on any motor; physical feasibility determines achievable behavior.
 
-- `M29_PAIR_EN=1` is **rejected at Mode29 entry** when `M29_BALLOC=1`.
-  The existing firmware pairing algorithm still applies an instantaneous
-  second artificial motor loss with a permanent inhibit latch.
-  MuJoCo's re-entry timing, progressively ramped pair loss and physical
-  yaw-authority optimization have NOT been implemented/validated in
-  Pixhawk yet. Combining them would be unsafe.
-- **Yaw limitation**: the current physical soft cap is not a guaranteed
-  constraint when residual rotor moment cannot brake spin.
-- **Recovery**: the high-loss MuJoCo simulations can maintain position
-  during injection but lose position after restoring the failed motor.
-  A separate recovery transition with actuator slew limits, status
-  handover, fault persistence handling and navigation validation is needed.
-- This code has not yet been compared against Softdrone thrust-stand data
-  at every battery voltage, actual motor DSHOT/PWM actuator mapping, AHRS
-  behavior at large yaw spin, or flight-control CPU performance.
+## Progressive opposite derating and retry
 
-## Bench/HIL checklist (propellers removed)
+- Blind onboard FDI identifies the original motor and estimates its loss.
+  The known motor ID and severity from deliberate injected fault are only
+  used as experiment safeguards; not substituted as estimator input during
+  injection.
+- For candidate opposite `(motor_id-1)^1`, check whether the *current*
+  requested total thrust, roll and pitch can be attained with full target
+  mirrored loss and all effective 0..100 motor boundaries.
+- If target is feasible, hold feasibility for **150 ms**, then increase
+  mirrored loss at **70 percentage points/s**. Recheck the exact
+  F/Mx/My feasible interval at each step.
+- If transient moments become infeasible, withdraw the synthetic opposite
+  loss at **140 pp/s** and schedule another attempt after **300 ms**.
+  Do NOT permanently inhibit for this ordinary wrench transient.
+- Compare attainable yaw-braking torque under mirrored vs single loss
+  whenever measured body yaw spin exceeds 0.5 rad/s. Mirroring is withheld
+  if it worsens braking authority by more than 0.002 N*m. This explicitly
+  fixes the mistaken assumption that equal fractional loss is always good
+  for yaw braking.
+- Wrong confirmed motor identification remains a hard supervised
+  experiment block. Large position error or invalid navigation suppresses
+  pairing. No hard-coded 80% or 90% exception.
+- While an artificial second failure is applied, the one-fault FDI residual
+  is not a valid severity update: it is held rather than misinterpreted.
 
-1. Capture the exact prior working firmware and all current parameters.
-2. Flash the GitHub Actions `arducopter.apj` **only onto the intended
-   Pixhawk 6C Mini test hardware** and retain the ability to restore.
-3. Leave `M29_PAIR_EN=0`. With propellers removed, test
-   `M29_BALLOC=0` first; only then set `M29_BALLOC=1` while disarmed.
-4. Verify RC overrides, physical motor ordering M1..M4, actuator output
-   limits, 500-ms watchdog, mode exit, disarm, navigation validity, and
-   independent physical kill. Observe `L1BA,L1DG,L1FD,L1GS,L1PR`.
-5. Exercise arbitrary fractional injected severities in a
-   non-flight simulator or restrained **motor-unpowered** HIL setup;
-   assert `Fpred` does not exceed physically reachable sum of caps.
-6. Perform CPU loop timing regression, calibration mismatch tests,
-   FDI false positive tests, and controlled recovery tests before
-   considering a different propeller-on experimental firmware.
+## High-speed yaw and staged fault recovery
 
-## Build location
+- In bounded/HIL fault and recovery modes, yaw controller requests a
+  speed-damping torque `clamp(-0.045*gyro_z, ±0.15 N*m)`, but physical
+  yaw moment is selected only from the residual nullspace after F/Mx/My.
+  The allocator exposes `yaw_min_nm` and `yaw_max_nm`.
+- `motor_bounded_yaw_unbrakeable` becomes true if the physically
+  achievable moment cannot oppose the measured spin; a warning is
+  emitted when spinning faster than 180 deg/s. **Neither the software yaw
+  setpoint nor the measured gyro is artificially clipped. A hard yaw
+  speed limit CANNOT be guaranteed if there is no braking torque.**
+- When the operator ends a **software-injected** primary fault, the
+  applied injector impairment is reduced at **100 pp/s** and the
+  internal compensation tracks that same known effectiveness. The
+  synthetic opposite impairment is withdrawn no slower than the primary.
+  This avoids a one-tick 90%-to-zero injected-thrust effectiveness change.
+- FDI adaptation is suspended during the staged injected release; a
+  2-second re-anchoring cooldown follows. A previous yaw-free latch is
+  retained to prevent grabbing an old heading while still spinning.
+- **Crucial caveat:** This uses *known injected effectiveness on recovery*,
+  so is **not** a validated solution for spontaneous mechanical recovery.
+  Unknown recovery requires independent actuator-effectiveness sensing or
+  observer verification. Fast yaw can also corrupt IMU/navigation tracking.
+- Every path retains the old mode-exit, disarm, watchdog and finite-value
+  actuator output checks. Hardware-in-loop protection remains to be tested.
 
-GitHub Actions:
-`https://github.com/ssybh2/L1Quad-original/actions/workflows/build-mode29-bounded-hil.yml`
+## DataFlash records
 
-Artifacts (only when CI compilation succeeds):
-`mode29-bounded-hil-only-pixhawk6c-firmware` containing
-`arducopter.apj`, `arducopter.bin`, `BUILD_INFO.txt`.
+- `L1BA`: `ena,sat,Freq,Fpred,Er,Ep,Freeze` — bounded allocation,
+  requested/predicted collective, roll/pitch errors, frozen FDI updates.
+- `L1PB`: `ena,mir,targ,retry,wait,ymn,ymx,spin,rec,inj` —
+  actual mirror loss, FDI target, retry count, pending retry,
+  attainable yaw-braking envelope, body yaw rate, staged recovery flag and
+  applied **injected** fault loss.
+- `L1DG,L1FD,L1PR,L1GS,L1GA` are retained for motor commands,
+  FDI estimates, pair state, gain source and geometric-controller gains.
+- `L1PB.ymn/ymx` are static **model predictions**. They are not direct
+  force/torque measurements; calibration voltage/lag and geometry errors
+  must be quantified separately.
 
-No claim of flight-safety or a successful flash is implied by compilation.
+## Required tests before any physical flight
+
+1. Confirm GitHub Pixhawk6C toolchain compiles successfully.
+2. Confirm timing budget at 400 Hz with `M29_BALLOC=1, M29_PAIR_EN=1`.
+3. In an unpowered HIL vehicle, compare all four motor IDs and multiple
+   fractional losses (not only 80/90) with the MuJoCo reference.
+4. Check 150-ms feasibility hold, mirrored 70-pp/s ramp, transient
+   retreat/retry and no false FDI reconfirmations.
+5. Verify unavailable yaw braking is explicitly detected, and that no
+   re-entry/exit path sacrifices collective or roll/pitch as a hidden
+   price for yaw. Run sign-convention and actuator ordering tests.
+6. End injection while high-speed yaw is simulated, check staged loss
+   release, position bound, heading reacquisition and finite outputs.
+7. Require full 36-second closed loop and **under 0.5 m maximum 3D
+   position error** including post-fault recovery before even proposing
+   propeller-on validation. Current 80%/90% MuJoCo results DO NOT pass.
+
+## Build
+
+GitHub workflow:
+https://github.com/ssybh2/L1Quad-original/actions/workflows/build-mode29-bounded-hil.yml
+
+Successful build artifact: `mode29-bounded-hil-only-pixhawk6c-firmware`,
+containing `arducopter.apj`, `arducopter.bin`, and `BUILD_INFO.txt`.
+The checks above are NOT implied by compilation success.
