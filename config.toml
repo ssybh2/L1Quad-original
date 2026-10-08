@@ -190,7 +190,7 @@ max_tilt_deg = 30.0
 [opposite_pair]
 enabled = false
 source = "fdi"
-max_loss_percent = 70.0
+min_allocation_reciprocal_condition = 1.0e-5
 max_estimate_bias_percent = 8.0
 min_static_thrust_margin = 1.5
 max_body_yaw_rate_rps = 4.0
