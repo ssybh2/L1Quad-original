@@ -93,6 +93,7 @@ class OppositePairExperiment:
         self.full_wrench_hold_s = float(cfg.get("feasible_hold_s", 0.15))
         self.mirror_ramp_rate_pp_s = float(cfg.get("mirror_ramp_rate_pp_s", 70.0))
         self.minimum_primary_reserve_n = float(cfg.get("minimum_primary_reserve_n", 0.0))
+        self.max_position_yaw_scale = float(cfg.get("max_position_yaw_scale", 0.65))
         self.L = float(vehicle["L_m"]) if "L_m" in vehicle else 0.28
         self.D = float(vehicle["D_m"]) if "D_m" in vehicle else 0.28
         self.min_margin = float(cfg.get("min_static_thrust_margin", 1.5))
@@ -104,7 +105,8 @@ class OppositePairExperiment:
                              or self.severity_settle_s < 0 or self.severity_step_tolerance_pp <= 0
                              or self.retry_delay_s < 0 or self.full_wrench_hold_s < 0
                              or self.mirror_ramp_rate_pp_s <= 0
-                             or self.minimum_primary_reserve_n < 0):
+                             or self.minimum_primary_reserve_n < 0
+                             or not (0.0 <= self.max_position_yaw_scale <= 1.0)):
             raise ValueError("invalid opposite_pair safety configuration")
         self.active = False
         self.inhibited = False
@@ -206,9 +208,11 @@ class OppositePairExperiment:
             "waiting for continuously feasible F/Mx/My primary wrench"
         )
         # Slow down yaw when position error consumes the control margin.
-        self.position_priority_scale = float(np.clip(
-            1.0 - self._last_xy_error / max(self.max_xy, 1e-6), 0.0, 1.0
-        )) if hasattr(self, "_last_xy_error") else 1.0
+        self.position_priority_scale = (
+            self.max_position_yaw_scale *
+            float(np.clip(1.0 - self._last_xy_error / max(self.max_xy, 1e-6),
+                          0.0, 1.0))
+        ) if hasattr(self, "_last_xy_error") else self.max_position_yaw_scale
         return True
 
     def update(self, t, measured_pos, measured_omega, target_altitude,
