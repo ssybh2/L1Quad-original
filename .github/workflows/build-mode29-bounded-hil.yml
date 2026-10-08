@@ -6,6 +6,7 @@ on:
       - feature/mode29-bounded-hil-20261008
       - feature/mode29-fdi-antiwindup-hil-20261008
       - feature/mode29-fdi-robust-hil-20261008
+      - feature/mode29-fdi-robust-v2-hil-20261008
   workflow_dispatch:
 
 jobs:
@@ -58,6 +59,7 @@ jobs:
           echo "Includes staged *software injected* fault release; spontaneous real motor recovery unproven" >> firmware-hil/BUILD_INFO.txt
           echo "HIL FDI: 125ms transition resettling, saturation observability, guarded weak-loss candidates" >> firmware-hil/BUILD_INFO.txt
           echo "L1FI fields: raw,step,ratio,w,gate,held,stall,est" >> firmware-hil/BUILD_INFO.txt
+          echo "HIL v2: weak-fault adaptive 2:1 recovery hysteresis, ≤35% threshold" >> firmware-hil/BUILD_INFO.txt
           echo "NOT CLEARED FOR PROPELLER-ON FLIGHT; HIL/BENCH ONLY" >> firmware-hil/BUILD_INFO.txt
           ls -lh firmware-hil/
 
