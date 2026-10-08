@@ -993,6 +993,9 @@ class BlindMotorFaultDetector:
         self.loss_instant_percent = 0.0
         self.loss_rate_pp_s = 0.0
         self.prev_estimate_for_rate = 0.0
+        self.frozen_estimate_samples = 0
+        self.implausible_innovation_count = 0
+        self.instant_loss_unclipped_pct = 0.0
         if self.cooldown_seconds < 0.0:
             raise ValueError("recovery_cooldown_s must be >=0")
 
@@ -1042,6 +1045,7 @@ class BlindMotorFaultDetector:
         self.loss_instant_percent = 0.0
         self.loss_rate_pp_s = 0.0
         self.prev_estimate_for_rate = 0.0
+        self.instant_loss_unclipped_pct = 0.0
 
     def update(self, t, measured_omega, freeze_confirmed_estimate=False):
         omega = np.asarray(measured_omega, dtype=float)
@@ -1135,7 +1139,12 @@ class BlindMotorFaultDetector:
             # clamp is active so that this artificial intervention cannot be
             # mistaken for motor recovery or a different loss magnitude.
             if freeze_confirmed_estimate:
+                # Saturated allocation corrupts the one-motor model's
+                # effectiveness residual: keep the last trusted estimate.
                 self.recovery_count = 0
+                self.frozen_estimate_samples += 1
+                self.loss_rate_pp_s = 0.0
+                self.loss_instant_percent = 0.0
                 return
             signature = self.signature_filtered[idx]
             signature_norm_sq = float(signature@signature)
@@ -1144,10 +1153,19 @@ class BlindMotorFaultDetector:
                 return
 
             signed_fraction = float(observed@signature/signature_norm_sq)
-            self.loss_instant_percent = 100.0*signed_fraction
+            self.instant_loss_unclipped_pct = 100.0*signed_fraction
+            self.loss_instant_percent = float(np.clip(
+                self.instant_loss_unclipped_pct, -100.0, 100.0
+            )) if np.isfinite(signed_fraction) else 0.0
+            # Huge innovation violates the 0..100% single-motor signature.
+            plausible = np.isfinite(signed_fraction) and abs(signed_fraction) <= 1.0
+            if not plausible:
+                self.implausible_innovation_count += 1
+                self.recovery_count = 0
+                return
             fit_error = observed - signature*signed_fraction
             self.residual_ratio = float(np.linalg.norm(fit_error)/max(observed_norm, 1.0e-4))
-            if np.isfinite(signed_fraction) and (
+            if plausible and (
                 observed_norm < 1.0e-4 or self.residual_ratio <= self.confirmed_fit_limit
             ):
                 loss_fraction = np.clip(self.loss_estimate_percent/100.0, 0.0, 1.0)
@@ -1469,6 +1487,13 @@ def run(cfg):
         "fdi_state","fdi_motor","fdi_candidate","fdi_confirm_count","fdi_recovery_count",
         "fdi_loss_estimate_pct","fdi_residual_ratio","fdi_sigma_mx","fdi_sigma_my","fdi_sigma_mz",
         "fdi_loss_instant_pct","fdi_loss_rate_pp_s","fdi_cooldown_remaining_s",
+        "fdi_loss_unclipped_instant_pct","fdi_estimate_frozen_samples",
+        "fdi_implausible_innovation_count","allocation_model_unreliable",
+        "alloc_primary_feasible","alloc_primary_saturated","alloc_collective_clamped",
+        "alloc_collective_requested_n","alloc_collective_achievable_n",
+        "alloc_collective_predicted_n","alloc_collective_error_n",
+        "alloc_roll_error_nm","alloc_pitch_error_nm",
+        "alloc_motor_lower_count","alloc_motor_upper_count",
         "schedule_mode","schedule_raw_loss_pct","schedule_loss_pct","schedule_confidence",
         "allocator_effectiveness_loss_pct","schedule_allocator_mismatch_pp",
         "active_kpx","active_kpy","active_kpz","active_kvx","active_kvy","active_kvz",
@@ -1532,6 +1557,8 @@ def run(cfg):
     yaw_rate_limiter_active = False
     yaw_feedback_request = 0.0
     yaw_allocation_diag = {}
+    last_allocator_unreliable = False
+    allocator_diag = {}
 
     try:
         with log_path.open("w", newline="", encoding="utf-8") as f:
@@ -1561,6 +1588,7 @@ def run(cfg):
                         meas_Omega,
                         freeze_confirmed_estimate=(
                             yaw_rate_limiter_active or pair.active or
+                            last_allocator_unreliable or
                             (pair.retry_pending and data.time < pair.retry_at_s)
                         ),
                     )
@@ -1691,6 +1719,8 @@ def run(cfg):
                     if (not np.isfinite(total_cmd).all()) or total_cmd[0] <= 0.0:
                         raise RuntimeError(f"invalid L1-augmented output: {total_cmd}")
 
+                    # Reset diagnostics for allocator selected THIS iteration.
+                    mixer.last_effectiveness_diag = {}
                     if pair.active:
                         pair.plan_mirror(data.time, dt, total_cmd, mixer)
                         if not pair.active:
@@ -1791,6 +1821,8 @@ def run(cfg):
                     reason = str(e)
                     break
 
+                allocator_diag = getattr(mixer, "last_effectiveness_diag", {})
+                last_allocator_unreliable = bool(allocator_diag.get("primary_saturated", False))
                 # The normal plant path is unchanged: command jitter and motor
                 # lag produce a nominal actuator state. Fault effectiveness is
                 # then injected in thrust space before static mismatch/noise.
@@ -1926,6 +1958,21 @@ def run(cfg):
                     "fdi_loss_instant_pct":detector.loss_instant_percent,
                     "fdi_loss_rate_pp_s":detector.loss_rate_pp_s,
                     "fdi_cooldown_remaining_s":max(0., detector.cooldown_until_s-data.time),
+                    "fdi_loss_unclipped_instant_pct":detector.instant_loss_unclipped_pct,
+                    "fdi_estimate_frozen_samples":detector.frozen_estimate_samples,
+                    "fdi_implausible_innovation_count":detector.implausible_innovation_count,
+                    "allocation_model_unreliable":int(last_allocator_unreliable),
+                    "alloc_primary_feasible":int(allocator_diag.get("primary_feasible", True)),
+                    "alloc_primary_saturated":int(allocator_diag.get("primary_saturated", False)),
+                    "alloc_collective_clamped":int(allocator_diag.get("collective_clamped", False)),
+                    "alloc_collective_requested_n":allocator_diag.get("collective_requested_n", total_cmd[0]),
+                    "alloc_collective_achievable_n":allocator_diag.get("collective_achievable_n", total_cmd[0]),
+                    "alloc_collective_predicted_n":allocator_diag.get("collective_predicted_n", 0.0),
+                    "alloc_collective_error_n":allocator_diag.get("collective_error_n", 0.0),
+                    "alloc_roll_error_nm":allocator_diag.get("roll_error_nm", 0.0),
+                    "alloc_pitch_error_nm":allocator_diag.get("pitch_error_nm", 0.0),
+                    "alloc_motor_lower_count":allocator_diag.get("motor_lower_count", 0),
+                    "alloc_motor_upper_count":allocator_diag.get("motor_upper_count", 0),
                     "schedule_mode":scheduler.mode,
                     "schedule_raw_loss_pct":scheduler.raw_loss,
                     "schedule_loss_pct":scheduler.scheduled_loss,
