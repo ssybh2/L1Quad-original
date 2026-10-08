@@ -130,6 +130,9 @@ class OppositePairExperiment:
         self.mirror_rollback_count = 0
         self.primary_interval_width_n = 0.0
         self.position_priority_scale = 1.0
+        self.yaw_backoff_count = 0
+        self._last_yaw_rate = 0.0
+        self._last_yaw_soft_cap = float("inf")
 
     def defer(self, t, reason):
         """Temporary fallback; preserve the blind single-fault FDI estimate."""
@@ -156,6 +159,22 @@ class OppositePairExperiment:
         if not self.active:
             return False
         target = self.estimated_loss_percent
+        # Yaw speed is lower priority than XYZ. Near the per-loss speed
+        # envelope, first restore actuator authority by withdrawing the
+        # artificial opposite loss; never clip the gyro state.
+        if self._last_yaw_rate > .78*self._last_yaw_soft_cap:
+            self.yaw_backoff_count += 1
+            self.mirror_loss_percent = max(
+                0.0, self.mirror_loss_percent -
+                max(0.0, dt)*2.0*self.mirror_ramp_rate_pp_s
+            )
+            self.feasible_since_s = None
+            self.feasible_stable = False
+            if self._last_yaw_rate > .95*self._last_yaw_soft_cap:
+                self.defer(t, "yaw approaching scheduled speed ceiling; synthetic pair withdrawn")
+                return False
+            self.transient_reason = "yaw cap approaching; giving control authority back"
+            return True
         check = lambda pct: paired_primary_feasibility(
             mixer, cmd, self.failed_motor_id, target, pct,
             self.minimum_primary_reserve_n
@@ -226,6 +245,7 @@ class OppositePairExperiment:
         z_error = abs(float(pos[2]) + float(target_altitude)) if finite else float("inf")
         yaw_rate = abs(float(omega[2])) if finite else float("inf")
         self._last_xy_error = xy_error
+        self._last_yaw_rate = yaw_rate
         # Physical yaw-rate ceiling is loss-dependent in paired experiments.
         # No simulator gyro clipping. A separate harder abort handles lack
         # of torque authority or excessive transients.
@@ -236,6 +256,11 @@ class OppositePairExperiment:
                      if yaw_envelope is not None and yaw_envelope.enabled
                      else self.max_spin)
         self.yaw_abort_limit_rps = yaw_abort
+        self._last_yaw_soft_cap = (
+            math.radians(yaw_envelope.limit_deg_s(chosen_loss))
+            if yaw_envelope is not None and yaw_envelope.enabled
+            else self.max_spin
+        )
         guard = (not finite or xy_error > self.max_xy or z_error > self.max_z or
                  yaw_rate > yaw_abort)
 
@@ -268,7 +293,7 @@ class OppositePairExperiment:
         if guard or (self.retry_count and
                      (xy_error > .75*self.max_xy or
                       z_error > .75*self.max_z or
-                      yaw_rate > .75*yaw_abort)):
+                      yaw_rate > .60*self._last_yaw_soft_cap)):
             return
         if self.source == "oracle":
             # Simulation-only independent check of allocation physics:
