@@ -24,7 +24,7 @@ profile:
   name: mode29_tuning
   airframe: softdrone
   description: Current real-airframe Mode29 working profile with runtime-configurable takeoff.
-  firmware_branch: feature/mode29-position-gain-schedule
+  firmware_branch: feature/mode29-pixhawk-next-from-20261006
 
 parameters:
   trajectory:
@@ -37,6 +37,7 @@ parameters:
     # Standard profile keeps gain scheduling disabled. Use
     # mode29_position_gain_schedule.yaml explicitly for calibration/automatic mode.
     M29_GS_MODE: 0
+    M29_PAIR_EN: 0  # OFF: preserve ordinary flight behavior
 
   geometric_position:
     GEOCTRL_KPX: 4.0
