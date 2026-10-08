@@ -24,7 +24,7 @@ profile:
   name: mode29_tuning
   airframe: softdrone
   description: Current real-airframe Mode29 working profile with runtime-configurable takeoff.
-  firmware_branch: feature/mode29-position-gain-schedule
+  firmware_branch: feature/mode29-from-60pct-20261006
 
 parameters:
   trajectory:
