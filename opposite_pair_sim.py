@@ -86,12 +86,17 @@ class OppositePairExperiment:
         self.max_tilt_deg = float(max_tilt_deg)
         self.min_condition = float(cfg.get("min_allocation_reciprocal_condition", 1.0e-5))
         self.max_bias = float(cfg.get("max_estimate_bias_percent", 8.0))
+        self.severity_settle_s = float(cfg.get("severity_settle_time_s", 0.12))
+        self.severity_step_tolerance_pp = float(cfg.get("severity_step_tolerance_pp", 1.0))
+        self.L = float(vehicle["L_m"]) if "L_m" in vehicle else 0.28
+        self.D = float(vehicle["D_m"]) if "D_m" in vehicle else 0.28
         self.min_margin = float(cfg.get("min_static_thrust_margin", 1.5))
         self.max_spin = float(cfg.get("max_body_yaw_rate_rps", 4.0))
         self.max_xy = float(cfg.get("max_xy_error_m", 0.5))
         self.max_z = float(cfg.get("max_z_error_m", 0.4))
         if self.enabled and (not (0 < self.min_condition <= 1) or
-                             min(self.max_spin, self.max_xy, self.max_z, self.min_margin) <= 0):
+                             min(self.max_spin, self.max_xy, self.max_z, self.min_margin) <= 0
+                             or self.severity_settle_s < 0 or self.severity_step_tolerance_pp <= 0):
             raise ValueError("invalid opposite_pair safety configuration")
         self.active = False
         self.inhibited = False
@@ -103,6 +108,10 @@ class OppositePairExperiment:
         self.activated_at_s = None
         self.disengaged_at_s = None
         self.yaw_abort_limit_rps = self.max_spin
+        self.severity_stable_since_s = None
+        self.severity_prev_pct = None
+        self.retry_pending = False
+        self.transient_reason = ""
 
     def update(self, t, measured_pos, measured_omega, target_altitude,
                original_fault_active, injector, detector, yaw_envelope=None):
@@ -147,7 +156,13 @@ class OppositePairExperiment:
                 else:
                     self.reason = "unknown paired-fault disengagement"
             return
-        if self.inhibited or not original_fault_active:
+        if not original_fault_active:
+            self.severity_stable_since_s = None
+            self.severity_prev_pct = None
+            self.retry_pending = False
+            self.transient_reason = ""
+            return
+        if self.inhibited:
             return
         if guard:
             return
@@ -168,6 +183,10 @@ class OppositePairExperiment:
             if not np.isfinite(loss) or not np.isfinite(detector.residual_ratio):
                 return
             if loss <= 0.0 or detector.residual_ratio > 0.35:
+                self.severity_stable_since_s = None
+                self.severity_prev_pct = None
+                self.retry_pending = True
+                self.transient_reason = "FDI severity/residual not ready"
                 return
         if not (0.0 <= loss <= 100.0) or not (0.0 <= injector.loss_percent <= 100.0):
             self.inhibited = True
@@ -176,15 +195,32 @@ class OppositePairExperiment:
         if loss <= 0.0:
             # An exact 0% injection creates no faulty motor to identify.
             return
-        if self.source == "fdi" and abs(loss - injector.loss_percent) > self.max_bias:
-            self.inhibited = True
-            self.reason = "FDI estimate disagrees with known injected loss"
-            return
+        if self.source == "fdi":
+            # Motor ID confirmation is NOT a guarantee that severity has settled.
+            # Temporary magnitude disagreement is retryable, not a permanent
+            # actuator safety fault. We require a sustained stable estimate.
+            if (self.severity_prev_pct is None or
+                abs(loss - self.severity_prev_pct) > self.severity_step_tolerance_pp):
+                self.severity_stable_since_s = float(t)
+            self.severity_prev_pct = loss
+            if abs(loss - injector.loss_percent) > self.max_bias:
+                self.retry_pending = True
+                self.transient_reason = "FDI severity still disagrees with injected benchmark"
+                self.severity_stable_since_s = None
+                return
+            if self.severity_stable_since_s is None:
+                self.severity_stable_since_s = float(t)
+            if float(t) - self.severity_stable_since_s < self.severity_settle_s:
+                self.retry_pending = True
+                self.transient_reason = "FDI severity settling"
+                return
+        self.retry_pending = False
+        self.transient_reason = ""
         eta = 1.0 - loss/100.0
         # Observability is independent from actuator feasibility. Check
         # rank/conditioning, not an arbitrary loss-percentage cutoff.
-        L = float(getattr(self, "L", 0.28))
-        D = float(getattr(self, "D", 0.28))
+        L = self.L
+        D = self.D
         geom = np.vstack((np.ones(4),
             0.5 * L * np.array([-1., 1., 1., -1.]),
             0.5 * D * np.array([1., -1., 1., -1.])))
