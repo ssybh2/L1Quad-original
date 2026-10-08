@@ -268,6 +268,17 @@ max_estimate_bias_percent = 8.0
 # A transient 8pp disagreement is retryable rather than permanent inhibition.
 severity_settle_time_s = 0.12
 severity_step_tolerance_pp = 1.0
+# GENERAL for all 0..100% failures, not special handling for 80%.
+# Retry temporary primary-wrench infeasibility instead of permanently locking.
+retry_delay_s = 0.30
+# Full desired opposite loss must be dynamically feasible for this long
+# before the artificial motor degradation begins ramping.
+feasible_hold_s = 0.15
+# Maximum gradual reduction of the opposite motor's thrust effectiveness,
+# in percentage points per second. E.g. 60pp/s takes >1s to reach 80% loss.
+mirror_ramp_rate_pp_s = 70.0
+# Require this many Newtons headroom on each rotor in feasibility checks.
+minimum_primary_reserve_n = 0.0
 min_static_thrust_margin = 1.5
 max_body_yaw_rate_rps = 4.0
 max_xy_error_m = 0.5
