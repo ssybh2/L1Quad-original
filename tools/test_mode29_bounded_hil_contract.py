@@ -124,13 +124,19 @@ def check_high_loss_and_braking():
     caps=[wcap,100,100,100]
     assert exact_primary([10.474,-1.904,1.779,0],caps) is None
     # Pair feasibility and yaw authority are tested under capped PWM.
-    no_mirror=yaw_interval([10.29,-.083,.007,0],[wcap,100,100,100])
-    paired=yaw_interval([10.29,-.083,.007,0],[wcap,wcap,100,100])
+    # The previous nonzero moment is ALSO physically infeasible with
+    # near-dead PWM capped M1: rejection is expected and correct.
+    stressed=yaw_interval([10.29,-.083,.007,0],[wcap,100,100,100])
+    assert stressed is None
+    # Hover with zero roll/pitch can remain feasible by allocating the
+    # primary wrench on the two non-capped motors, without yaw guarantee.
+    no_mirror=yaw_interval([10.29,0,0,0],[wcap,100,100,100])
+    paired=yaw_interval([10.29,0,0,0],[wcap,wcap,100,100])
     assert no_mirror is not None
-    if paired is not None:
-        assert all(math.isfinite(x) for x in paired)
-    # A mirror cannot be taken as beneficial merely because it is 80%.
-    print("HIL geometry: yaw interval with/without mirror",no_mirror,paired)
+    assert paired is not None
+    assert all(math.isfinite(x) for x in no_mirror+paired)
+    print("HIL PWM-cap geometry: infeasible wrench refused;",
+          "zero RP yaw authority before/after mirror",no_mirror,paired)
 
 
 if __name__=="__main__":
