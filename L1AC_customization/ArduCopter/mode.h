@@ -2097,6 +2097,8 @@ private:
     bool motor_pwm_last_sent_valid = false;
     bool motor_pwm_cap_latched = false;
     uint32_t motor_pwm_cap_clipped_samples = 0U;
+    float motor_pwm_cap_release_start = 0.0f;
+    float motor_pwm_cap_release_loss = 0.0f;
     bool motor_bounded_recovery_active = false;
     uint32_t motor_bounded_recovery_cooldown_until_ms = 0U;
     bool motor_bounded_fault_seen_this_run = false;
