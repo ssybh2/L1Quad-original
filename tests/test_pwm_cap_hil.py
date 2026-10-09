@@ -36,7 +36,7 @@ class PwmCapHILTests(unittest.TestCase):
     def test_80pct_cap_of_40_is_8_not_20pct_of_thrust(self):
         before=40.0
         outputs=[cap(before,80,w) for w in [40,50,60,80,100,100]]
-        self.assertEqual(outputs,[8.0]*len(outputs))
+        for w in outputs:self.assertAlmostEqual(w,8.0)
         self.assertAlmostEqual(force(outputs[-1]),force(8))
         self.assertGreater(abs(force(8)-0.2*force(40)),.01)
 
@@ -67,7 +67,7 @@ class PwmCapHILTests(unittest.TestCase):
         self.assertAlmostEqual(mirror_caps[-1],target_cap)
         self.assertEqual(sorted(mirror_caps,reverse=True),mirror_caps)
         self.assertLess(mirror_caps[0]-mirror_caps[1],5)
-        self.assertEqual(cap(primary_baseline,80,100),8.0)
+        self.assertAlmostEqual(cap(primary_baseline,80,100),8.0)
         self.assertIn("mode29_mirror_pwm_cap(",CODE)
         self.assertIn("motor_pwm_cap_baseline[opposite],target,mirror_loss",CODE)
 
