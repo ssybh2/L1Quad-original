@@ -2540,7 +2540,33 @@ void ModeAdaptive::run()
 
     motor_fault_nominal_prev = motorPWMCommanded;
     motor_fault_nominal_prev_valid = true;
-
+#if REAL_OR_SITL
+    if (motor_bounded_enabled_this_run && g.l1enable != 0) {
+        // Crucial observer consistency: the L1 predictor must propagate
+        // the *nominal wrench attainable by the controller's chosen PWM*,
+        // not an impossible demanded F/Mx/My/Mz. This prevents ordinary
+        // allocation saturation from masquerading as an actuator fault.
+        // All terms below use PRE-injection nominal commands only.
+        VectorN<float,4> nominal_achieved;
+        mode29_zero(nominal_achieved);
+        constexpr float r[4]={-0.14f,+0.14f,+0.14f,-0.14f};
+        constexpr float p[4]={+0.14f,-0.14f,+0.14f,-0.14f};
+        constexpr float mz_sign[4]={+1.0f,+1.0f,-1.0f,-1.0f};
+        for (uint8_t i=0;i<4;i++) {
+            const float fi=softdrone_thrust_from_w(motorPWMCommanded[i]);
+            const float mi=softdrone_moment_from_w(motorPWMCommanded[i]);
+            nominal_achieved[0]+=fi;
+            nominal_achieved[1]+=r[i]*fi;
+            nominal_achieved[2]+=p[i]*fi;
+            nominal_achieved[3]+=mz_sign[i]*mi;
+        }
+        if (mode29_finite(nominal_achieved)) {
+            for (uint8_t i=0;i<4;i++) {
+                u_b_prev[i]=nominal_achieved[i]-u_ad_prev[i];
+            }
+        }
+    }
+#endif
     VectorN<float, 4> motorPWM = motorPWMCommanded;
 
     // Apply both simulated impairments through the *same thrust-domain* mapping
