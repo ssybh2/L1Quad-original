@@ -2438,8 +2438,8 @@ void ModeAdaptive::run()
         // No fixed-heading catch-up at high spin. Desired yaw is physical
         // braking torque, clipped to the *remaining* nullspace below.
         // Rate damping persists through the entire fault recovery.
-        if (motor_fault_confirmed || motor_bounded_recovery_active ||
-            motor_pair_active || motor_fault_yaw_free_latched) {
+        if (motor_fault_confirmed || motor_pair_active ||
+            motor_fault_yaw_free_latched) {
             requested[3]=constrain_float(-0.045f*omega.z,-0.15f,0.15f);
         }
         // Dynamic admission uses the same current F/Mx/My request as the
