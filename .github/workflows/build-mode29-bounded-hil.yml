@@ -8,6 +8,7 @@ on:
       - feature/mode29-fdi-robust-hil-20261008
       - feature/mode29-fdi-robust-v2-hil-20261008
       - feature/mode29-prefault-pwm-cap-hil-20261009
+      - feature/mode29-blind-pwmcap-fdi-hil-20261009
   workflow_dispatch:
 
 jobs:
@@ -29,11 +30,15 @@ jobs:
           python3 tools/test_mode29_bounded_hil_contract.py
           python3 -m unittest discover -s tests -p 'test_fdi_hil_antiwindup.py' -v
           python3 -m unittest discover -s tests -p 'test_pwm_cap_hil.py' -v
+          python3 -m unittest discover -s tests -p 'test_blind_pwmcap_fdi_hil.py' -v
           grep -q 'motor_pwm_cap_baseline=motor_pwm_last_sent;' L1AC_customization/ArduCopter/mode_adaptive.cpp
           grep -q 'softdrone_thrust_from_w(pwm_caps\[i\])' L1AC_customization/ArduCopter/mode_adaptive.cpp
           grep -q 'motorPWM\[i\]=MIN(motorPWM\[i\],injected_cap_pwm\[i\]);' L1AC_customization/ArduCopter/mode_adaptive.cpp
           grep -q 'GSCALAR(m29_balloc_en, "M29_BALLOC", 0)' L1AC_customization/ArduCopter/Parameters.cpp
-          grep -q 'update_bounded_pair_mode(motor_degradation_active,requested' L1AC_customization/ArduCopter/mode_adaptive.cpp
+          grep -q 'update_bounded_pair_mode(motor_fault_confirmed,requested' L1AC_customization/ArduCopter/mode_adaptive.cpp
+          grep -q 'mode29_bounded_allocate(requested, blind_allocator_caps' L1AC_customization/ArduCopter/mode_adaptive.cpp
+          grep -q 'update_blind_pwmcap_fdi(timeInThisRun)' L1AC_customization/ArduCopter/mode_adaptive.cpp
+          grep -q 'AP::logger().Write("L1BF"' L1AC_customization/ArduCopter/mode_adaptive.cpp
           grep -q 'motor_bounded_recovery_cooldown_until_ms' L1AC_customization/ArduCopter/mode_adaptive.cpp
           grep -q 'motor_bounded_yaw_unbrakeable' L1AC_customization/ArduCopter/mode_adaptive.cpp
           grep -q 'mode29_bounded_allocate' L1AC_customization/ArduCopter/mode_adaptive.cpp
@@ -67,7 +72,12 @@ jobs:
           echo "HIL v2: weak-fault adaptive 2:1 recovery hysteresis, ≤35% threshold" >> firmware-hil/BUILD_INFO.txt
           echo "CAP DEFINITION: w_cap=w_last_applied_before_injection*(1-loss/100), w=(PWM_us-1000)/10" >> firmware-hil/BUILD_INFO.txt
           echo "IMPORTANT: cap-limited PWM (NOT 20% remaining thrust), snapshot frozen from last pre-fault output" >> firmware-hil/BUILD_INFO.txt
-          echo "Experimental oracle-assisted cap-aware allocation/pair admission; L1-FDI severity NOT calibrated for PWM cap" >> firmware-hil/BUILD_INFO.txt
+          echo "HIL BLIND PROTOTYPE: nonlinear observer-fit faulted motor and unknown fixed PWM ceiling" >> firmware-hil/BUILD_INFO.txt
+          echo "INFORMATION FIREWALL: injector ID/loss NEVER used by FDI, bounded allocation, or paired admission" >> firmware-hil/BUILD_INFO.txt
+          echo "HIL blind FDI: L1BF id,cap,pre,pct,fit,conf,streak" >> firmware-hil/BUILD_INFO.txt
+          echo "M29_GS_MODE=1 oracle scheduling intentionally disabled when M29_BALLOC=1" >> firmware-hil/BUILD_INFO.txt
+          echo "Independent recovery above estimated cap is unobservable; cap remains latched until Mode29 exit" >> firmware-hil/BUILD_INFO.txt
+          echo "Offline perfect-signature tests are NOT closed-loop HIL or hardware safety validation" >> firmware-hil/BUILD_INFO.txt
           echo "DataFlash L1PC: valid,motor,base,cap,opp,bopp,copp,clip" >> firmware-hil/BUILD_INFO.txt
           echo "NOT CLEARED FOR PROPELLER-ON FLIGHT; HIL/BENCH ONLY" >> firmware-hil/BUILD_INFO.txt
           ls -lh firmware-hil/
@@ -75,6 +85,6 @@ jobs:
       - name: Upload compile-verified Pixhawk6C binaries
         uses: actions/upload-artifact@v4
         with:
-          name: mode29-bounded-hil-only-pixhawk6c-firmware
+          name: mode29-blind-pwmcap-fdi-hil-only-pixhawk6c-firmware
           path: firmware-hil/
           if-no-files-found: error
