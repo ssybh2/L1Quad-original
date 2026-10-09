@@ -155,7 +155,7 @@ struct Mode29BoundedDiag {
 // At fixed F/Mx/My all four thrusts differ by s*[+,+,-,-]; the exact
 // positive/capacity bounds intersect iff [lo,hi] is nonempty.
 bool mode29_primary_interval(const VectorN<float, 4> &cmd,
-                             const float eta[4],
+                             const float pwm_caps[4],
                              float &lo, float &hi, float base[4])
 {
     constexpr float L=0.28f, D=0.28f;
@@ -164,9 +164,9 @@ bool mode29_primary_interval(const VectorN<float, 4> &cmd,
     const float max_f=softdrone_thrust_from_w(100.0f);
     float cap_sum=0.0f;
     for (uint8_t i=0;i<4;i++) {
-        if (!isfinite(cmd[i]) || !isfinite(eta[i]) ||
-            eta[i]<0.0f || eta[i]>1.0f) { return false; }
-        cap_sum+=eta[i]*max_f;
+        if (!isfinite(cmd[i]) || !isfinite(pwm_caps[i]) ||
+            pwm_caps[i]<0.0f || pwm_caps[i]>100.0f) { return false; }
+        cap_sum+=softdrone_thrust_from_w(pwm_caps[i]);
     }
     if (F<-0.002f || F>cap_sum+0.002f) { return false; }
     base[0]=0.25f*F-mx/(2.0f*L)+my/(2.0f*D);
@@ -176,7 +176,7 @@ bool mode29_primary_interval(const VectorN<float, 4> &cmd,
     lo=-1.0e6f; hi=1.0e6f;
     for (uint8_t i=0;i<4;i++) {
         const float a=-base[i]/signs[i];
-        const float b=(eta[i]*max_f-base[i])/signs[i];
+        const float b=(softdrone_thrust_from_w(pwm_caps[i])-base[i])/signs[i];
         lo=MAX(lo,MIN(a,b)); hi=MIN(hi,MAX(a,b));
     }
     return lo<=hi+1.0e-5f;
@@ -186,17 +186,17 @@ bool mode29_primary_interval(const VectorN<float, 4> &cmd,
 // this lets high-spin behavior prefer whichever attainable mirror fraction
 // has MORE braking authority, rather than automatically undoing the pair.
 bool mode29_primary_yaw_interval(const VectorN<float, 4> &cmd,
-                                 const float eta[4],
+                                 const float pwm_caps[4],
                                  float &yaw_min,float &yaw_max)
 {
     float lo,hi,base[4];
-    if (!mode29_primary_interval(cmd,eta,lo,hi,base)) { return false; }
+    if (!mode29_primary_interval(cmd,pwm_caps,lo,hi,base)) { return false; }
     const float sign[4]={1.0f,1.0f,-1.0f,-1.0f};
-    const float cap=softdrone_thrust_from_w(100.0f);
     const auto moment_at=[&](float s) -> float {
         float out=0.0f;
         for (uint8_t i=0;i<4;i++) {
-            const float fi=constrain_float(base[i]+s*sign[i],0.0f,eta[i]*cap);
+            const float fi=constrain_float(base[i]+s*sign[i],0.0f,
+                softdrone_thrust_from_w(pwm_caps[i]));
             out+=sign[i]*softdrone_moment_from_w(
                 softdrone_w_from_thrust(fi));
         }
@@ -212,28 +212,26 @@ bool mode29_primary_yaw_interval(const VectorN<float, 4> &cmd,
 // Lexicographic priority: feasible collective -> nearest roll/pitch at fixed
 // collective -> only residual reaction-torque authority for yaw.
 bool mode29_bounded_allocate(const VectorN<float, 4> &desired,
-                             const float eta[4],
+                             const float pwm_caps[4],
                              VectorN<float, 4> &w,
                              Mode29BoundedDiag &diag)
 {
     constexpr float L = 0.28f;
     constexpr float D = 0.28f;
     constexpr float EPS = 1.0e-5f;
-    const float max_f = softdrone_thrust_from_w(100.0f);
     const float sign[4] = {1.0f, 1.0f, -1.0f, -1.0f};
     const float r[4] = {-0.5f*L, 0.5f*L, 0.5f*L, -0.5f*L};
     const float p[4] = {0.5f*D, -0.5f*D, 0.5f*D, -0.5f*D};
     float cap[4];
     float max_total = 0.0f;
-    if (!isfinite(max_f) || max_f <= 0.0f) {
-        return false;
-    }
     for (uint8_t i=0; i<4; i++) {
-        if (!isfinite(desired[i]) || !isfinite(eta[i]) ||
-            eta[i] < 0.0f || eta[i] > 1.0f) {
+        if (!isfinite(desired[i]) || !isfinite(pwm_caps[i]) ||
+            pwm_caps[i] < 0.0f || pwm_caps[i] > 100.0f) {
             return false;
         }
-        cap[i] = eta[i] * max_f;
+        // Cap is a *PWM position* frozen before injection, not a thrust
+        // effectiveness multiplier on the current desired motor thrust.
+        cap[i] = softdrone_thrust_from_w(pwm_caps[i]);
         max_total += cap[i];
     }
     const float F = constrain_float(desired[0], 0.0f, max_total);
@@ -403,10 +401,8 @@ bool mode29_bounded_allocate(const VectorN<float, 4> &desired,
     float achieved_f=0.0f,achieved_mx=0.0f,achieved_my=0.0f;
     for (uint8_t i=0; i<4; i++) {
         const float f=constrain_float(base[i]+s*sign[i],0.0f,cap[i]);
-        // If effectiveness is zero, never divide by eta.
-        const float nominal=(eta[i]>1.0e-6f) ? f/eta[i] : 0.0f;
-        w[i]=constrain_float(softdrone_w_from_thrust(nominal),0.0f,100.0f);
-        const float actual=eta[i]*softdrone_thrust_from_w(w[i]);
+        w[i]=constrain_float(softdrone_w_from_thrust(f),0.0f,pwm_caps[i]);
+        const float actual=softdrone_thrust_from_w(w[i]);
         achieved_f+=actual; achieved_mx+=r[i]*actual; achieved_my+=p[i]*actual;
     }
     diag.requested_f=desired[0];
@@ -879,8 +875,8 @@ void ModeAdaptive::update_bounded_pair_mode(bool injected_active,
     if (!motor_bounded_enabled_this_run || !motor_pair_enabled_this_run) {
         return;
     }
-    // Bench/HIL controlled injection only. Never autonomously damage a
-    // second rotor for an uncommanded real failure.
+    // HIL ORACLE-ASSISTED: use injected motor ID and requested PWM-cap loss
+    // ONLY for synthetic opposite cap admission. Not a blind FDI/FTC claim.
     constexpr float ramp_pp_s=70.0f;
     constexpr float rollback_pp_s=140.0f;
     constexpr uint32_t hold_ms=150U;
@@ -893,15 +889,9 @@ void ModeAdaptive::update_bounded_pair_mode(bool injected_active,
         motor_pair_active=motor_pair_loss_pct>0.001f;
         motor_pair_feasible_since_ms=0U;
     };
-    if (!injected_active) {
-        // Smoothly remove the synthetic mirror, while the injected primary
-        // loss is separately released through its controlled HIL ramp.
+    if (!injected_active || !motor_pwm_cap_latched) {
         withdraw(false);
-        // The opposite synthetic impairment must never persist stronger
-        // than the controlled primary during recovery; otherwise we create
-        // a new one-sided artificial fault at the end of the ramp.
-        motor_pair_loss_pct=MIN(motor_pair_loss_pct,
-                                motor_bounded_injected_loss_pct);
+        motor_pair_loss_pct=MIN(motor_pair_loss_pct,motor_bounded_injected_loss_pct);
         motor_pair_active=motor_pair_loss_pct>0.001f;
         motor_pair_retry_pending=false;
         motor_pair_target_loss_pct=0.0f;
@@ -919,57 +909,45 @@ void ModeAdaptive::update_bounded_pair_mode(bool injected_active,
     const bool attitude_valid=mode29_finite(omega);
     const float xy=nav_valid?sqrtf(pos.x*pos.x+pos.y*pos.y):1.0e6f;
     const float z=nav_valid?fabsf(pos.z+takeoffAlt):1.0e6f;
-
     if (!nav_valid || !attitude_valid ||
         xy>MOTOR_PAIR_MAX_XY_ERROR_M || z>MOTOR_PAIR_MAX_Z_ERROR_M ||
         !motors->armed() || g.LandFlag || trajIndex!=0) {
         withdraw(true);
         return;
     }
-    // Wrong motor ID is a hard supervision fault, unlike transient wrench
-    // infeasibility or temporary FDI severity discrepancy.
-    if (motor_fault_confirmed && motor_fault_detected_id!=motor_degradation_motor_id) {
-        motor_pair_inhibited=true;
-    }
-    if (motor_pair_inhibited || !motor_fault_confirmed ||
-        motor_fault_detected_id<1 || motor_fault_detected_id>4 ||
-        !isfinite(motor_fault_loss_estimate_pct) ||
-        fabsf(motor_fault_loss_estimate_pct-motor_degradation_loss_pct)>
-            MOTOR_PAIR_MAX_ESTIMATE_BIAS_PCT) {
-        withdraw(false);
+
+    const uint8_t failed=motor_bounded_injected_motor_id-1U;
+    if (failed>3U || motor_pair_inhibited) {
+        withdraw(true);
         return;
     }
-    const uint8_t failed=motor_fault_detected_id-1U;
     const uint8_t opposite=failed^1U;
-    const float target=constrain_float(motor_fault_loss_estimate_pct,0.0f,100.0f);
+    // This is the user-requested *PWM ceiling loss*, NOT the equivalent
+    // thrust loss from the L1 observer.
+    const float target=constrain_float(motor_bounded_injected_loss_pct,0.0f,100.0f);
     motor_pair_target_loss_pct=target;
     motor_pair_fault_id=failed+1U;
     motor_pair_opposite_id=opposite+1U;
 
-    const auto authority=[&](float synthetic_loss,float &yaw_lo,
+    const auto authority=[&](float mirror_loss,float &yaw_lo,
                               float &yaw_hi)->bool {
-        float eta[4]={1.0f,1.0f,1.0f,1.0f};
-        eta[failed]=1.0f-0.01f*target;
-        eta[opposite]=1.0f-0.01f*synthetic_loss;
-        return mode29_primary_yaw_interval(cmd,eta,yaw_lo,yaw_hi);
+        float pwm_caps[4]={100.0f,100.0f,100.0f,100.0f};
+        pwm_caps[failed]=constrain_float(
+            motor_pwm_cap_baseline[failed]*(1.0f-0.01f*target),0.0f,100.0f);
+        pwm_caps[opposite]=constrain_float(
+            motor_pwm_cap_baseline[opposite]*(1.0f-0.01f*mirror_loss),0.0f,100.0f);
+        return mode29_primary_yaw_interval(cmd,pwm_caps,yaw_lo,yaw_hi);
     };
     float baseline_min=0.0f,baseline_max=0.0f;
     float target_min=0.0f,target_max=0.0f;
     const bool original_feasible=authority(0.0f,baseline_min,baseline_max);
     const bool target_feasible=authority(target,target_min,target_max);
-    // The mirrored-loss choice must NOT sacrifice yaw braking torque at
-    // high spin, nor the requested three-axis primary wrench.
-    const auto worsens_braking=[&](float test_min,float test_max) -> bool {
-        if (fabsf(omega.z)<0.50f || !original_feasible) {
-            return false;
-        }
-        return (omega.z<0.0f && test_max < baseline_max-0.002f) ||
-               (omega.z>0.0f && test_min > baseline_min+0.002f);
+    const auto worsens_braking=[&](float test_min,float test_max)->bool {
+        if (fabsf(omega.z)<0.50f || !original_feasible) { return false; }
+        return (omega.z<0.0f && test_max<baseline_max-0.002f) ||
+               (omega.z>0.0f && test_min>baseline_min+0.002f);
     };
-    const bool acceptable=target_feasible &&
-                           !worsens_braking(target_min,target_max);
-    if (!acceptable) {
-        // Temporary physical infeasibility. Never permanently inhibit.
+    if (!target_feasible || worsens_braking(target_min,target_max)) {
         motor_pair_feasible_since_ms=0U;
         if (!motor_pair_retry_pending) {
             motor_pair_retry_count++;
@@ -990,15 +968,10 @@ void ModeAdaptive::update_bounded_pair_mode(bool injected_active,
         motor_pair_feasible_since_ms=now;
     }
     if (now-motor_pair_feasible_since_ms<hold_ms) {
-        // Important: DO NOT clear feasible_since while waiting. Otherwise
-        // every 400-Hz tick restarts the 150-ms hold and mirroring never
-        // enters, even when the wrench stays feasible continuously.
-        motor_pair_loss_pct=MAX(0.0f,
-            motor_pair_loss_pct-ramp_pp_s*step);
+        motor_pair_loss_pct=MAX(0.0f,motor_pair_loss_pct-ramp_pp_s*step);
         motor_pair_active=motor_pair_loss_pct>0.001f;
         return;
     }
-
     const float proposed=MIN(target,motor_pair_loss_pct+ramp_pp_s*step);
     float proposed_min,proposed_max;
     if (!authority(proposed,proposed_min,proposed_max) ||
@@ -1966,7 +1939,7 @@ void ModeAdaptive::run()
     // untouched:
     //   RC9  : <=1200 disable, >=1800 enable
     //   RC10 : motor selector (1..4)
-    //   RC11 : 1000..2000 => 0..100% thrust-effectiveness loss
+    //   RC11 : 1000..2000 => 0..100% frozen pre-fault PWM-cap loss
     //   RC12 : <=1200 keep yaw control, >=1800 yaw-free mode
     RC_Channel *deg_enable_ch = rc().channel(8);
     RC_Channel *deg_motor_ch = rc().channel(9);
@@ -2018,29 +1991,54 @@ void ModeAdaptive::run()
         motor_degradation_loss_pct > 0.0f &&
         motor_degradation_command_fresh(motor_deg_now_ms);
 
-    // HIL-only synchronized release of the intentionally injected
-    // effectiveness impairment. Do not transfer this "known injection"
-    // handover to a spontaneous real motor recovery: in that case the
-    // actual actuator effectiveness is not independently measured.
+    // New experimental definition: capture last *applied* normalized PWM
+    // (the sample immediately before first active injection), then hold the
+    // captured value constant until the fault and staged release finish.
+    // The loss controls a HARD PWM CEILING, never a multiplier on desired
+    // thrust. On-board FDI remains an independent diagnostic and must not
+    // be claimed to identify this nonlinear ceiling as a constant loss.
     if (motor_bounded_enabled_this_run) {
         if (motor_degradation_active) {
+            if (!motor_pwm_cap_latched) {
+                const uint8_t idx=motor_degradation_motor_id-1U;
+                if (idx>=4U || !motor_pwm_last_sent_valid ||
+                    !mode29_finite(motor_pwm_last_sent) ||
+                    motor_pwm_last_sent[idx]<10.0f) {
+                    abort_mode29("HIL PWM-cap injection: invalid pre-fault sample");
+                    return;
+                }
+                motor_pwm_cap_baseline=motor_pwm_last_sent;
+                motor_pwm_cap_latched=true;
+                motor_pwm_cap_clipped_samples=0U;
+                GCS_SEND_TEXT(MAV_SEVERITY_WARNING,
+                    "Mode29 HIL PWM cap: M%u pre=%.1f, loss=%.0f%%",
+                    (unsigned)motor_degradation_motor_id,
+                    (double)motor_pwm_cap_baseline[idx],
+                    (double)motor_degradation_loss_pct);
+            }
+            if (motor_bounded_injected_motor_id!=0U &&
+                motor_degradation_motor_id!=motor_bounded_injected_motor_id) {
+                abort_mode29("HIL PWM-cap injection motor changed mid-fault");
+                return;
+            }
             motor_bounded_injected_motor_id=motor_degradation_motor_id;
             motor_bounded_injected_loss_pct=motor_degradation_loss_pct;
             motor_bounded_recovery_active=false;
-        } else if (motor_bounded_injected_loss_pct>0.001f) {
+        } else if (motor_pwm_cap_latched &&
+                   motor_bounded_injected_loss_pct>0.001f) {
             motor_bounded_recovery_active=true;
-            // Reduce injector and allocator compensation together, rather
-            // than removing a 90%-scale impairment in one 2.5ms tick.
+            // Expand PWM ceiling at 100 percentage points/second.
             motor_bounded_injected_loss_pct=MAX(
-                0.0f, motor_bounded_injected_loss_pct-100.0f*0.0025f);
+                0.0f,motor_bounded_injected_loss_pct-100.0f*0.0025f);
             if (motor_bounded_injected_loss_pct<=0.001f) {
                 motor_bounded_injected_loss_pct=0.0f;
                 motor_bounded_recovery_active=false;
                 const bool hold_yaw_free=motor_fault_yaw_free_latched;
                 clear_auto_motor_fault();
                 motor_fault_yaw_free_latched=hold_yaw_free;
-                motor_bounded_recovery_cooldown_until_ms=
-                    motor_deg_now_ms+2000U;
+                motor_bounded_recovery_cooldown_until_ms=motor_deg_now_ms+2000U;
+                motor_pwm_cap_latched=false;
+                motor_bounded_injected_motor_id=0U;
             }
         }
     }
@@ -2194,6 +2192,7 @@ void ModeAdaptive::run()
     // mixer. Fault mode intentionally drops the yaw-moment objective so the
     // remaining actuator authority is spent on thrust, roll and pitch.
     VectorN<float, 4> motorPWMCommanded;
+    float injected_cap_pwm[4]={100.0f,100.0f,100.0f,100.0f};
 #if REAL_OR_SITL
     if (motor_bounded_enabled_this_run) {
         VectorN<float, 4> requested =
@@ -2213,28 +2212,26 @@ void ModeAdaptive::run()
         // Dynamic admission uses the same current F/Mx/My request as the
         // bounded mixer. Transient infeasibility never permanently latches.
         update_bounded_pair_mode(motor_degradation_active,requested,0.0025f);
-        float effectiveness[4] = {1.0f,1.0f,1.0f,1.0f};
-        // During intentional fault-injection release, known applied
-        // effectiveness and command compensation are staged together.
-        // This is a HIL injection protocol, not real unknown fault recovery.
-        if (!motor_degradation_active && motor_bounded_recovery_active &&
+        // HIL oracle-assisted allocation uses the experimentally known
+        // PWM caps. The FDI loss estimate is intentionally NOT substituted:
+        // a hard PWM cap is not a uniform thrust-effectiveness reduction.
+        if (motor_pwm_cap_latched &&
             motor_bounded_injected_motor_id>=1 &&
             motor_bounded_injected_motor_id<=4) {
-            effectiveness[motor_bounded_injected_motor_id-1U]=
-                1.0f-0.01f*motor_bounded_injected_loss_pct;
-        } else if (motor_fault_confirmed &&
-                   motor_fault_detected_id>=1 && motor_fault_detected_id<=4) {
-            effectiveness[motor_fault_detected_id-1U]=
-                1.0f-0.01f*constrain_float(
-                    motor_fault_loss_estimate_pct,0.0f,100.0f);
+            const uint8_t idx=motor_bounded_injected_motor_id-1U;
+            injected_cap_pwm[idx]=constrain_float(
+                motor_pwm_cap_baseline[idx]*
+                (1.0f-0.01f*motor_bounded_injected_loss_pct),0.0f,100.0f);
         }
-        if (motor_pair_active && motor_pair_opposite_id>=1 &&
-            motor_pair_opposite_id<=4) {
-            effectiveness[motor_pair_opposite_id-1U]=
-                1.0f-0.01f*constrain_float(motor_pair_loss_pct,0.0f,100.0f);
+        if (motor_pwm_cap_latched && motor_pair_active &&
+            motor_pair_opposite_id>=1 && motor_pair_opposite_id<=4) {
+            const uint8_t idx=motor_pair_opposite_id-1U;
+            injected_cap_pwm[idx]=constrain_float(
+                motor_pwm_cap_baseline[idx]*
+                (1.0f-0.01f*motor_pair_loss_pct),0.0f,100.0f);
         }
         Mode29BoundedDiag allocation;
-        if (!mode29_bounded_allocate(requested, effectiveness,
+        if (!mode29_bounded_allocate(requested, injected_cap_pwm,
                                      motorPWMCommanded, allocation)) {
             abort_mode29("HIL bounded allocator failed");
             return;
@@ -2283,9 +2280,7 @@ void ModeAdaptive::run()
         return;
     }
 
-    // Saturate the nominal actuator request before the injected effectiveness
-    // loss. Therefore an 80%-effective motor can never recover 100% nominal
-    // thrust by asking for more than the normal actuator limit.
+    // Saturate nominal actuator requests before applying hard PWM caps.
     for (uint8_t i = 0; i < 4; i++) {
         motorPWMCommanded[i] = constrain_float(motorPWMCommanded[i], 0.0f, 100.0f);
     }
@@ -2320,22 +2315,14 @@ void ModeAdaptive::run()
     };
 
     if (motor_bounded_enabled_this_run) {
-        // The actuator-side simulator emulates ONLY the controlled Orange Pi
-        // injection. On command release, phase its imposed loss down while
-        // the bounded allocator uses the same staged effectiveness.
-        if (motor_bounded_injected_motor_id>=1 &&
-            motor_bounded_injected_motor_id<=4 &&
-            motor_bounded_injected_loss_pct>0.001f) {
-            apply_modelled_motor_loss(
-                motor_bounded_injected_motor_id-1U,
-                motor_bounded_injected_loss_pct);
-        }
-        // The synthetic second fault is distinct from the injected primary.
-        if (motor_pair_active && motor_pair_opposite_id>=1 &&
-            motor_pair_opposite_id<=4 &&
-            motor_pair_opposite_id!=motor_bounded_injected_motor_id) {
-            apply_modelled_motor_loss(motor_pair_opposite_id-1U,
-                                     motor_pair_loss_pct);
+        // Independent post-allocation ceiling enforcement. Allocator and
+        // actuator-side clamp must agree, including all recovery ticks.
+        for (uint8_t i=0;i<4;i++) {
+            if (motorPWM[i]>injected_cap_pwm[i]+1.0e-4f &&
+                motor_pwm_cap_clipped_samples<UINT32_MAX) {
+                motor_pwm_cap_clipped_samples++;
+            }
+            motorPWM[i]=MIN(motorPWM[i],injected_cap_pwm[i]);
         }
     } else if (motor_degradation_active) {
         apply_modelled_motor_loss(motor_degradation_motor_id - 1U,
@@ -2356,6 +2343,36 @@ void ModeAdaptive::run()
         motorPWM[2] = 1;
         motorPWM[3] = 1;
     }
+    // Keep the actual last-cycle output. Snapshot it ONCE at the next
+    // injection edge, prior to running that cycle's capped allocation.
+    if (!motor_pwm_cap_latched && !motor_bounded_recovery_active &&
+        !motor_degradation_active && !landingComplete &&
+        motors->armed() && motorEnable!=0 &&
+        mode29_finite(motorPWM)) {
+        motor_pwm_last_sent=motorPWM;
+        motor_pwm_last_sent_valid=true;
+    }
+
+    // Snapshot/ceiling evidence: values in 0..100 PWM scale, not newtons.
+    const uint8_t cap_primary=motor_bounded_injected_motor_id;
+    const uint8_t cap_opp=motor_pair_opposite_id;
+    AP::logger().Write("L1PC",
+                       "valid,motor,base,cap,opp,bopp,copp,clip",
+                       "BBfffffI",
+                       (uint8_t)motor_pwm_cap_latched,
+                       cap_primary,
+                       (double)((motor_pwm_cap_latched && cap_primary>=1U &&
+                                 cap_primary<=4U) ?
+                                motor_pwm_cap_baseline[cap_primary-1U]:0.0f),
+                       (double)((cap_primary>=1U && cap_primary<=4U) ?
+                                injected_cap_pwm[cap_primary-1U]:100.0f),
+                       (double)cap_opp,
+                       (double)((motor_pwm_cap_latched && cap_opp>=1U &&
+                                 cap_opp<=4U) ?
+                                motor_pwm_cap_baseline[cap_opp-1U]:0.0f),
+                       (double)((cap_opp>=1U && cap_opp<=4U) ?
+                                injected_cap_pwm[cap_opp-1U]:100.0f),
+                       (uint32_t)motor_pwm_cap_clipped_samples);
 
     AP::logger().Write("L1DG",
                        "active,yawfree,motor,loss,age,c1,c2,c3,c4,a1,a2,a3,a4",
