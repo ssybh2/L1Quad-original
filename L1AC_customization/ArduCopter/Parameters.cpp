@@ -664,8 +664,8 @@ const AP_Param::Info Copter::var_info[] = {
     GSCALAR(m29_pair_en, "M29_PAIR_EN", M29_PAIR_EN_DEFAULT),
 
     // @Param: M29_BALLOC
-    // @DisplayName: Mode29 bounded wrench allocator - HIL ONLY
-    // @Description: Disabled by default. Opt-in thrust-first constrained control allocation for unpowered SITL/HIL testing. Not qualified for propeller-on operation.
+    // @DisplayName: Mode29 frozen pre-fault PWM-cap allocator - HIL ONLY
+    // @Description: Disabled by default. On this experimental branch, uses capped normalized PWM (0..100) from last pre-injection sample instead of per-cycle thrust loss; allocation uses known injected caps (ORACLE-ASSISTED). NEVER qualified for propeller-on operation.
     // @Values: 0:Disabled,1:HILExperimental
     // @User: Advanced
     GSCALAR(m29_balloc_en, "M29_BALLOC", 0),
