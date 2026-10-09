@@ -492,6 +492,8 @@ bool ModeAdaptive::init(bool ignore_checks)
     motor_pwm_last_sent_valid = false;
     motor_pwm_cap_latched = false;
     motor_pwm_cap_clipped_samples = 0U;
+    motor_pwm_cap_release_start = 0.0f;
+    motor_pwm_cap_release_loss = 0.0f;
     motor_bounded_recovery_active = false;
     motor_bounded_recovery_cooldown_until_ms = 0U;
     motor_bounded_fault_seen_this_run = false;
