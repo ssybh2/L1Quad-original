@@ -658,14 +658,14 @@ const AP_Param::Info Copter::var_info[] = {
 
     // @Param: M29_PAIR_EN
     // @DisplayName: Mode29 opposite-motor derating experiment
-    // @Description: Off by default. During an explicitly injected single-motor loss, mirror the observer-confirmed effectiveness loss onto the opposite motor. Requires an FDI-confirmed matching motor; guarded and experimental, not for unplanned motor failures.
+    // @Description: On this blind HIL branch, ONLY a confidently confirmed observation-based motor/PWM-cap estimate can enable a voluntary opposite-motor command cap. Uses estimated healthy command baseline; no injected motor or loss is passed to control. Not validated for powered flight.
     // @Values: 0:Disabled,1:PairedLossExperiment
     // @User: Advanced
     GSCALAR(m29_pair_en, "M29_PAIR_EN", M29_PAIR_EN_DEFAULT),
 
     // @Param: M29_BALLOC
-    // @DisplayName: Mode29 frozen pre-fault PWM-cap allocator - HIL ONLY
-    // @Description: Disabled by default. On this experimental branch, uses capped normalized PWM (0..100) from last pre-injection sample instead of per-cycle thrust loss; allocation uses known injected caps (ORACLE-ASSISTED). NEVER qualified for propeller-on operation.
+    // @DisplayName: Mode29 blind sensor-based PWM-cap allocator - HIL ONLY
+    // @Description: Disabled by default. Independent FDI infers faulted motor and PWM upper bound from previous nominal commands and L1 moment observations; unknown injection is applied only downstream. No oracle caps reach the estimator/allocator. NOT flight-qualified.
     // @Values: 0:Disabled,1:HILExperimental
     // @User: Advanced
     GSCALAR(m29_balloc_en, "M29_BALLOC", 0),
