@@ -62,8 +62,15 @@ When `M29_PAIR_EN=1`, the experiment uses the already-frozen
 pre-primary-fault PWM snapshot of the opposite motor. It never samples
 opposite PWM after the primary fault has changed commands.
 
-- The opposite cap follows
-  `w_cap_opp(t)=w_opp(t0^-)*(1-mirror_pct(t)/100)`.
+- To avoid a step from the full 0..100 range to the *frozen hover PWM*
+  at first admission, the opposite cap is interpolated continuously:
+  `w_cap_opp=100 + (w_opp(t0^-)*(1-L_target/100)-100)
+                        * (mirror_pct/L_target)`
+  (bounded to 0..100 and `mirror_pct<=L_target`).
+  It starts at **100** and reaches the user's required frozen snapshot
+  ceiling at `mirror_pct=L_target`. The mirror percentage is the
+  commanded progress toward the final hard cap, not an instantaneous
+  multiplier on a desired thrust.
 - The target mirror percentage is the *commanded primary PWM cap loss*
   for this supervised HIL experiment, not the L1-FDI projected thrust
   loss. The pair is **not** presented as blind autonomous fault control.
@@ -72,10 +79,13 @@ opposite PWM after the primary fault has changed commands.
   wrench, 300ms retry and yaw braking authority comparison.
 - Feasibility is now evaluated from `F_model(w_cap_i)`, not
   `(1-loss)*F_model(100)`. Pair may never engage for a deep cap.
-- Release expands primary PWM ceiling by reducing injected-loss percentage
-  at 100 percentage-points/s, and progressively withdraws paired
-  synthetic cap. Persistent recovery and actual mechanical health cannot
-  be inferred from injected values alone.
+- Release stores the exact capped primary PWM at command-off, then
+  continuously expands its ceiling all the way to **100** as the
+  injection-loss counter decreases at 100 percentage-points/s.
+  Simply expanding to the old hover PWM and instantaneously jumping to
+  100 at the end would be an unintended actuator discontinuity.
+  The synthetic paired ceiling also expands continuously to 100 while
+  withdrawn; persistent mechanical recovery is not inferred.
 
 ## DataFlash traces
 
