@@ -37,10 +37,10 @@ def w_from_f(f):
     return (lo+hi)*0.5
 
 
-def exact_primary(cmd, eta):
-    # The C++ analytical 4-rotor nullspace model: f=f0+s*[1,1,-1,-1].
+def exact_primary(cmd, pwm_caps):
+    # Cap-limited four-rotor nullspace: f=f0+s*[1,1,-1,-1].
     F,mx,my=cmd[:3]
-    cap=[thrust(100)*e for e in eta]
+    cap=[thrust(w) for w in pwm_caps]
     if F<-1e-6 or F>sum(cap)+1e-6: return None
     L=D=0.28
     base=[F/4-mx/(2*L)+my/(2*D),
@@ -58,8 +58,8 @@ def exact_primary(cmd, eta):
     return base,(lo,hi),cap
 
 
-def yaw_interval(cmd,eta):
-    data=exact_primary(cmd,eta)
+def yaw_interval(cmd,pwm_caps):
+    data=exact_primary(cmd,pwm_caps)
     if data is None: return None
     base,(lo,hi),cap=data
     sign=[1,1,-1,-1]
@@ -87,6 +87,10 @@ def check_source_contract():
     assert 'AP::logger().Write("L1PB"' in CPP
     assert 'AP::logger().Write("L1BA"' in CPP
     assert 'motor_pair_target_loss_pct' in HEADER
+    assert 'motor_pwm_cap_baseline=motor_pwm_last_sent;' in CPP
+    assert 'softdrone_thrust_from_w(pwm_caps[i])' in CPP
+    assert 'motorPWM[i]=MIN(motorPWM[i],injected_cap_pwm[i]);' in CPP
+    assert 'AP::logger().Write("L1PC"' in CPP
     # A 150-ms hold must not clear the same timer in the waiting branch.
     snippet=CPP.split('if (now-motor_pair_feasible_since_ms<hold_ms) {',1)[1].split('return;',1)[0]
     assert 'withdraw(' not in snippet
@@ -96,11 +100,11 @@ def check_source_contract():
 def check_continuous_geometry():
     for motor in range(4):
         for loss in (0,0.001,7.3,43.5,60,70,80,84.22,90,96.5,100):
-            eta=[1.0]*4
-            eta[motor]=1.0-loss/100
+            pwm_caps=[100.0]*4
+            pwm_caps[motor]=40.0*(1.0-loss/100.0)
             for F in (0,7.4,10.29,13.56,19.0):
                 cmd=[F,-.083,.007,0]
-                data=exact_primary(cmd,eta)
+                data=exact_primary(cmd,pwm_caps)
                 if data is None: continue
                 b,(lo,hi),cap=data
                 for s in (lo,(lo+hi)/2,hi):
@@ -113,14 +117,15 @@ def check_continuous_geometry():
 
 
 def check_high_loss_and_braking():
-    # Snapshot from the previous physically impossible 90% test.
-    cap1=thrust(100)*(.0567)
-    assert cap1<1
-    eta=[.0567,1,1,1]
-    assert exact_primary([10.474,-1.904,1.779,0],eta) is None
-    # Physical residual yaw authority may still accelerate the aircraft.
-    no_mirror=yaw_interval([10.29,-.083,.007,0],[.16,1,1,1])
-    paired=yaw_interval([10.29,-.083,.007,0],[.16,.16,1,1])
+    # 80% PWM cap at a previous w=40 produces only w<=8.
+    wcap=40*.2
+    assert wcap==8
+    assert thrust(wcap)<thrust(40)*.2
+    caps=[wcap,100,100,100]
+    assert exact_primary([10.474,-1.904,1.779,0],caps) is None
+    # Pair feasibility and yaw authority are tested under capped PWM.
+    no_mirror=yaw_interval([10.29,-.083,.007,0],[wcap,100,100,100])
+    paired=yaw_interval([10.29,-.083,.007,0],[wcap,wcap,100,100])
     assert no_mirror is not None
     if paired is not None:
         assert all(math.isfinite(x) for x in paired)
@@ -132,4 +137,4 @@ if __name__=="__main__":
     check_source_contract()
     check_continuous_geometry()
     check_high_loss_and_braking()
-    print("PASS: HIL source contracts and continuous 4-motor physical feasibility")
+    print("PASS: HIL PWM-cap source contracts and 4-motor feasibility")
