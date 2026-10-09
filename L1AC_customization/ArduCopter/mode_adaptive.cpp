@@ -1139,7 +1139,11 @@ ModeAdaptive::GainScheduleSet ModeAdaptive::gain_schedule_at_loss(float loss_pct
 
 void ModeAdaptive::update_gain_schedule(bool motor_degradation_active)
 {
-    const int8_t mode = constrain_int16((int16_t)g.m29_gs_mode, 0, 2);
+    // HIL blind branch MUST NOT use mode=1 oracle gain scheduling.
+    // The oracle mode remains available only in the untouched legacy path.
+    const int8_t selected_mode=constrain_int16((int16_t)g.m29_gs_mode,0,2);
+    const int8_t mode=(motor_bounded_enabled_this_run &&
+                       selected_mode==1) ? 0 : selected_mode;
     float raw_loss = 0.0f;
     float confidence = 0.0f;
 
@@ -2252,17 +2256,22 @@ void ModeAdaptive::run()
             if (motor_bounded_injected_loss_pct<=0.001f) {
                 motor_bounded_injected_loss_pct=0.0f;
                 motor_bounded_recovery_active=false;
-                const bool hold_yaw_free=motor_fault_yaw_free_latched;
-                clear_auto_motor_fault();
-                motor_fault_yaw_free_latched=hold_yaw_free;
+                // Injector-only release. DO NOT clear the blind FDI state:
+                // closed-loop capped commands cannot prove restored capacity.
+                // Estimator may be reset only by leaving Mode29/disarm.
                 motor_bounded_recovery_cooldown_until_ms=motor_deg_now_ms+2000U;
                 motor_pwm_cap_latched=false;
                 motor_bounded_injected_motor_id=0U;
             }
         }
     }
-    // Blind FDI uses previous L1 estimates, not injected truth.
-    update_auto_motor_fault_detector(timeInThisRun);
+    // The HIL detector and controller may use ONLY their own last nominal
+    // commands and physical observer data. The injector is excluded.
+    if (motor_bounded_enabled_this_run) {
+        update_blind_pwmcap_fdi(timeInThisRun);
+    } else {
+        update_auto_motor_fault_detector(timeInThisRun);
+    }
     if (!motor_bounded_enabled_this_run) {
         update_motor_pair_mode(motor_degradation_active);
     }
@@ -2295,8 +2304,8 @@ void ModeAdaptive::run()
 
     const bool yaw_free_active =
         motor_fault_yaw_free_latched ||
-        (motor_degradation_active && motor_degradation_yaw_free) ||
-        (motor_bounded_enabled_this_run && motor_bounded_recovery_active);
+        (!motor_bounded_enabled_this_run &&
+         motor_degradation_active && motor_degradation_yaw_free);
 
     if (yaw_free_active) {
         // Keep estimating yaw, but stop asking the aircraft to return to a
@@ -2323,7 +2332,10 @@ void ModeAdaptive::run()
         // Controlled lab-fault guard applies during injection AND recovery,
         // independent of the failure percentage. Abort the experiment after
         // persistent loss of position, not on a single noisy EKF frame.
-        motor_bounded_fault_seen_this_run |= motor_degradation_active;
+        // Navigation containment is unconditional after Mode29 hover,
+        // independent of any knowledge of experimental fault onset.
+        motor_bounded_fault_seen_this_run |=
+            timeInThisRun >= (takeoffTime+settleTime);
         if (motor_bounded_fault_seen_this_run) {
             Vector3f position;
             if (!ahrs.get_relative_position_NED_origin(position) ||
@@ -2411,6 +2423,9 @@ void ModeAdaptive::run()
     // mixer. Fault mode intentionally drops the yaw-moment objective so the
     // remaining actuator authority is spent on thrust, roll and pitch.
     VectorN<float, 4> motorPWMCommanded;
+    // Controller estimate and actuator-side injector truth have separate
+    // arrays and MUST NOT be copied into each other.
+    float blind_allocator_caps[4]={100.0f,100.0f,100.0f,100.0f};
     float injected_cap_pwm[4]={100.0f,100.0f,100.0f,100.0f};
 #if REAL_OR_SITL
     if (motor_bounded_enabled_this_run) {
@@ -2430,13 +2445,29 @@ void ModeAdaptive::run()
         }
         // Dynamic admission uses the same current F/Mx/My request as the
         // bounded mixer. Transient infeasibility never permanently latches.
-        update_bounded_pair_mode(motor_degradation_active,requested,0.0025f);
-        // HIL oracle-assisted allocation uses the experimentally known
-        // PWM caps. The FDI loss estimate is intentionally NOT substituted:
-        // a hard PWM cap is not a uniform thrust-effectiveness reduction.
+        update_bounded_pair_mode(motor_fault_confirmed,requested,0.0025f);
+        // BLIND allocation: only a confirmed sensor-derived cap can
+        // constrain the primary rotor. Ground-truth injection never enters
+        // this estimate or the admissible wrench geometry.
+        if (motor_fault_confirmed &&
+            motor_blind_confirmed_motor>=1U &&
+            motor_blind_confirmed_motor<=4U) {
+            const uint8_t idx=motor_blind_confirmed_motor-1U;
+            blind_allocator_caps[idx]=constrain_float(
+                motor_blind_cap_est_pwm,0.0f,100.0f);
+        }
+        if (motor_fault_confirmed && motor_pair_active &&
+            motor_pair_opposite_id>=1U && motor_pair_opposite_id<=4U) {
+            const uint8_t idx=motor_pair_opposite_id-1U;
+            blind_allocator_caps[idx]=mode29_mirror_pwm_cap(
+                motor_blind_healthy_pwm[idx],motor_pair_target_loss_pct,
+                motor_pair_loss_pct);
+        }
+        // Actuator-side **experimental injector only**: never feed these
+        // known values back into the controller/FDI (diagnostics allowed).
         if (motor_pwm_cap_latched &&
-            motor_bounded_injected_motor_id>=1 &&
-            motor_bounded_injected_motor_id<=4) {
+            motor_bounded_injected_motor_id>=1U &&
+            motor_bounded_injected_motor_id<=4U) {
             const uint8_t idx=motor_bounded_injected_motor_id-1U;
             if (motor_bounded_recovery_active) {
                 const float alpha=1.0f-
@@ -2453,15 +2484,8 @@ void ModeAdaptive::run()
                     0.0f,100.0f);
             }
         }
-        if (motor_pwm_cap_latched && motor_pair_active &&
-            motor_pair_opposite_id>=1 && motor_pair_opposite_id<=4) {
-            const uint8_t idx=motor_pair_opposite_id-1U;
-            injected_cap_pwm[idx]=mode29_mirror_pwm_cap(
-                motor_pwm_cap_baseline[idx],motor_pair_target_loss_pct,
-                motor_pair_loss_pct);
-        }
         Mode29BoundedDiag allocation;
-        if (!mode29_bounded_allocate(requested, injected_cap_pwm,
+        if (!mode29_bounded_allocate(requested, blind_allocator_caps,
                                      motorPWMCommanded, allocation)) {
             abort_mode29("HIL bounded allocator failed");
             return;
@@ -2545,8 +2569,9 @@ void ModeAdaptive::run()
     };
 
     if (motor_bounded_enabled_this_run) {
-        // Independent post-allocation ceiling enforcement. Allocator and
-        // actuator-side clamp must agree, including all recovery ticks.
+        // Experimental plant/injector applies its *unknown* cap AFTER
+        // independent controller allocation. A difference between c and a
+        // can now excite the L1 disturbance observer. NO estimator reads a.
         for (uint8_t i=0;i<4;i++) {
             if (motorPWM[i]>injected_cap_pwm[i]+1.0e-4f &&
                 motor_pwm_cap_clipped_samples<UINT32_MAX) {
@@ -2583,7 +2608,17 @@ void ModeAdaptive::run()
         motor_pwm_last_sent_valid=true;
     }
 
-    // Snapshot/ceiling evidence: values in 0..100 PWM scale, not newtons.
+    // Independent blind estimate. Valid only once confidence is confirmed.
+    AP::logger().Write("L1BF","id,cap,pre,pct,fit,conf,streak",
+                       "BfffffH",
+                       (uint8_t)motor_blind_confirmed_motor,
+                       (double)motor_blind_cap_est_pwm,
+                       (double)motor_blind_pre_fault_pwm,
+                       (double)motor_fault_loss_estimate_pct,
+                       (double)motor_blind_fit_ratio,
+                       (double)motor_blind_confidence,
+                       (uint16_t)motor_blind_consistent_samples);
+    // Injector ground-truth evidence (FOR LOGGING ONLY).
     const uint8_t cap_primary=motor_bounded_injected_motor_id;
     const uint8_t cap_opp=motor_pair_opposite_id;
     AP::logger().Write("L1PC",
