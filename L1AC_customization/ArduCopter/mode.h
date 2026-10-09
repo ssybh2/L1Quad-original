@@ -2090,6 +2090,13 @@ private:
     // All times are in the Mode29 scheduler; no hard loss-percentage threshold.
     float motor_bounded_injected_loss_pct = 0.0f;
     uint8_t motor_bounded_injected_motor_id = 0U;
+    // HIL PWM-ceiling impairment: snapshot LAST APPLIED, pre-injection output
+    // once per fault event. Units are normalized command w in [0,100].
+    VectorN<float, 4> motor_pwm_last_sent;
+    VectorN<float, 4> motor_pwm_cap_baseline;
+    bool motor_pwm_last_sent_valid = false;
+    bool motor_pwm_cap_latched = false;
+    uint32_t motor_pwm_cap_clipped_samples = 0U;
     bool motor_bounded_recovery_active = false;
     uint32_t motor_bounded_recovery_cooldown_until_ms = 0U;
     bool motor_bounded_fault_seen_this_run = false;
