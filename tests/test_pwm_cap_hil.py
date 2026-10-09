@@ -53,22 +53,34 @@ class PwmCapHILTests(unittest.TestCase):
         self.assertEqual(cap(40,100,99),0)
         self.assertEqual(cap(40,0,99),40)
 
-    def test_pair_uses_frozen_opposite_baseline_during_ramp(self):
+    def test_pair_ramp_is_continuous_from_100_to_frozen_snapshot_cap(self):
         primary_baseline,opposite_baseline=40.0,42.0
-        self.assertEqual(cap(primary_baseline,80,100),8.0)
-        previous=float("inf")
+        target_loss=80.0
+        target_cap=opposite_baseline*(1-target_loss/100)
+        mirror_caps=[]
         for elapsed in range(0,1200,50):
-            mirror_loss=min(80.0,70.0*elapsed/1000.0)
-            mirror=cap(opposite_baseline,mirror_loss,100)
-            self.assertLessEqual(mirror,previous+1e-5)
-            previous=mirror
-        self.assertAlmostEqual(cap(opposite_baseline,80,100),8.4)
+            mirror_pct=min(target_loss,70.0*elapsed/1000.0)
+            alpha=mirror_pct/target_loss
+            current_cap=100.0+(target_cap-100.0)*alpha
+            mirror_caps.append(current_cap)
+        self.assertAlmostEqual(mirror_caps[0],100.0)
+        self.assertAlmostEqual(mirror_caps[-1],target_cap)
+        self.assertEqual(sorted(mirror_caps,reverse=True),mirror_caps)
+        self.assertLess(mirror_caps[0]-mirror_caps[1],5)
+        self.assertEqual(cap(primary_baseline,80,100),8.0)
+        self.assertIn("mode29_mirror_pwm_cap(",CODE)
+        self.assertIn("motor_pwm_cap_baseline[opposite],target,mirror_loss",CODE)
 
-    def test_release_expands_pwm_limit_not_thrust_effectiveness(self):
-        vals=[cap(40,l,100) for l in (80,70,50,30,10,0)]
-        for got,want in zip(vals,(8,12,20,28,36,40)):
+    def test_release_expands_pwm_limit_continuously_to_full_100(self):
+        start_cap=40.0*(1-.8)
+        initial_loss=80.0
+        vals=[start_cap+(100-start_cap)*(1-loss/initial_loss)
+              for loss in (80,70,50,30,10,0)]
+        for got,want in zip(vals,(8,19.5,42.5,65.5,88.5,100)):
             self.assertAlmostEqual(got,want)
         self.assertEqual(sorted(vals),vals)
+        self.assertIn("motor_pwm_cap_release_start",CODE)
+        self.assertIn("motor_pwm_cap_release_loss",STATE)
 
     def test_legacy_thrust_loss_does_not_apply_in_balloc_branch(self):
         fragment=CODE.split("if (motor_bounded_enabled_this_run) {\n        // Independent post-allocation ceiling enforcement",1)[1]
