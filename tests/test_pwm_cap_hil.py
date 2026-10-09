@@ -69,7 +69,7 @@ class PwmCapHILTests(unittest.TestCase):
         self.assertLess(mirror_caps[0]-mirror_caps[1],5)
         self.assertAlmostEqual(cap(primary_baseline,80,100),8.0)
         self.assertIn("mode29_mirror_pwm_cap(",CODE)
-        self.assertIn("motor_pwm_cap_baseline[opposite],target,mirror_loss",CODE)
+        self.assertIn("motor_blind_healthy_pwm[opposite],target,mirror_loss",CODE)
 
     def test_release_expands_pwm_limit_continuously_to_full_100(self):
         start_cap=40.0*(1-.8)
@@ -83,15 +83,17 @@ class PwmCapHILTests(unittest.TestCase):
         self.assertIn("motor_pwm_cap_release_loss",STATE)
 
     def test_legacy_thrust_loss_does_not_apply_in_balloc_branch(self):
-        fragment=CODE.split("if (motor_bounded_enabled_this_run) {\n        // Independent post-allocation ceiling enforcement",1)[1]
+        fragment=CODE.split("if (motor_bounded_enabled_this_run) {\n        // Experimental plant/injector applies its",1)[1]
         self.assertIn("} else if (motor_degradation_active)",fragment[:900])
         self.assertIn("apply_modelled_motor_loss(",fragment)
 
-    def test_oracle_assistance_is_explicit_not_blind_fdi(self):
-        self.assertIn("HIL ORACLE-ASSISTED",CODE)
-        self.assertIn("HIL oracle-assisted allocation",CODE)
-        self.assertIn("motor_pair_target_loss_pct=target",CODE)
+    def test_injector_isolated_from_autonomous_allocator(self):
+        self.assertIn("mode29_bounded_allocate(requested, blind_allocator_caps",CODE)
+        self.assertIn("update_blind_pwmcap_fdi(timeInThisRun)",CODE)
+        self.assertIn("motor_blind_cap_est_pwm",CODE)
+        self.assertIn("motor_blind_healthy_pwm[opposite]",CODE)
         self.assertIn("motor_pwm_cap_latched",CODE)
+
 
 if __name__=="__main__":
     unittest.main()
