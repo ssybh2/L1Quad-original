@@ -2055,6 +2055,17 @@ private:
     bool motor_fault_sigma_valid = false;
     VectorN<float, 4> motor_fault_nominal_prev;
     bool motor_fault_nominal_prev_valid = false;
+    // Independent, observation-only PWM ceiling estimator. These states
+    // must NEVER be initialized from, or updated with, injector truth.
+    float motor_blind_healthy_pwm[4] = {};
+    bool motor_blind_healthy_valid = false;
+    float motor_blind_cap_candidate_pwm = 100.0f;
+    float motor_blind_cap_est_pwm = 100.0f;
+    float motor_blind_pre_fault_pwm = 0.0f;
+    float motor_blind_fit_ratio = 1.0f;
+    float motor_blind_confidence = 0.0f;
+    uint8_t motor_blind_confirmed_motor = 0U;
+    uint16_t motor_blind_consistent_samples = 0U;
 
     // HIL-only estimator diagnostics and observer-delay anti-windup.
     // Kept separate from legacy FDI when M29_BALLOC=0.
@@ -2144,6 +2155,7 @@ private:
     GainScheduleSet gain_schedule_active = {};
 
     void clear_auto_motor_fault();
+    void update_blind_pwmcap_fdi(float time_in_this_run);
     void reset_motor_pair_mode();
     void update_motor_pair_mode(bool motor_degradation_active);
     void update_bounded_pair_mode(bool motor_degradation_active,
