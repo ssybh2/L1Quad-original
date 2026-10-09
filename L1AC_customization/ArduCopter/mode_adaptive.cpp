@@ -714,6 +714,15 @@ void ModeAdaptive::clear_auto_motor_fault()
     motor_fault_sigma_valid = false;
     mode29_zero(motor_fault_nominal_prev);
     motor_fault_nominal_prev_valid = false;
+    for (uint8_t i=0;i<4;i++) { motor_blind_healthy_pwm[i]=0.0f; }
+    motor_blind_healthy_valid=false;
+    motor_blind_cap_candidate_pwm=100.0f;
+    motor_blind_cap_est_pwm=100.0f;
+    motor_blind_pre_fault_pwm=0.0f;
+    motor_blind_fit_ratio=1.0f;
+    motor_blind_confidence=0.0f;
+    motor_blind_confirmed_motor=0U;
+    motor_blind_consistent_samples=0U;
     motor_fdi_confirmed_at_ms = 0U;
     motor_fdi_guarded_cycles = 0U;
     motor_fdi_saturation_streak_samples = 0U;
@@ -1193,6 +1202,179 @@ void ModeAdaptive::update_gain_schedule(bool motor_degradation_active)
 
     gain_schedule_active =
         gain_schedule_at_loss(gain_schedule_loss_sched_pct);
+}
+
+// Observation-only, HIL-exclusive, unknown PWM-ceiling detector.
+// STRICT INFORMATION FIREWALL: only commanded motors (BEFORE injector),
+// L1 observer moments, and stable healthy command reference are used here.
+// Forbidden inputs: injected ID/loss, post-clamp PWM, captured injector
+// baseline, synthetic-mirror state or known fault-release schedule.
+//
+// Physical observation model: delta_tau is the reaction-moment difference
+// between desired PWM w and an unknown fixed ceiling c in [0,w]. Unlike
+// proportional effectiveness, deltaM/F is not constant for a PWM ceiling.
+void ModeAdaptive::update_blind_pwmcap_fdi(float time_in_this_run)
+{
+#if REAL_OR_SITL
+    motor_fdi_gate_code=0U;
+    const bool ready=motors->armed() && trajIndex==0 && !g.LandFlag &&
+                     g.l1enable!=0 &&
+                     time_in_this_run >= takeoffTime+settleTime &&
+                     motor_fault_nominal_prev_valid;
+    const Vector3f sigma={
+        sigma_m_hat_prev[1],sigma_m_hat_prev[2],sigma_m_hat_prev[3]};
+    if (!mode29_finite(sigma)) {
+        motor_fdi_gate_code=3U; return;
+    }
+    if (!motor_fault_sigma_valid) {
+        motor_fault_sigma_filtered=sigma;
+        motor_fault_sigma_baseline=sigma;
+        motor_fault_sigma_valid=true;
+        motor_fdi_gate_code=10U;
+        return;
+    }
+    motor_fault_sigma_filtered+=
+        (sigma-motor_fault_sigma_filtered)*0.05f;
+    if (!ready) {
+        motor_fault_sigma_baseline+=
+            (motor_fault_sigma_filtered-motor_fault_sigma_baseline)*0.02f;
+        motor_fault_candidate_id=0U;
+        motor_fault_confirm_count=0U;
+        motor_blind_consistent_samples=0U;
+        motor_fdi_gate_code=10U;
+        return;
+    }
+    if (!motor_blind_healthy_valid) {
+        for (uint8_t i=0;i<4;i++) {
+            motor_blind_healthy_pwm[i]=constrain_float(
+                motor_fault_nominal_prev[i],0.0f,100.0f);
+        }
+        motor_blind_healthy_valid=true;
+    }
+    // Post-identification excitation is absent once the controller obeys the
+    // estimated cap. Hold the last evidence-based ceiling; it is impossible
+    // to demonstrate recovered higher authority without re-excitation.
+    // A new fault trial requires a new Mode29 entry (no oracle-triggered reset).
+    if (motor_fault_confirmed) {
+        motor_fdi_gate_code=9U;
+        return;
+    }
+
+    const Vector3f obs=
+        motor_fault_sigma_filtered-motor_fault_sigma_baseline;
+    const float rp=sqrtf(obs.x*obs.x+obs.y*obs.y);
+    const float obs_norm=obs.length();
+    uint8_t best_id=0U;
+    float best_cap=100.0f,best_ratio=1.0f;
+    float best_force_deficit=0.0f;
+    constexpr float L=0.28f,D=0.28f;
+    constexpr float roll[4]={+0.5f*L,-0.5f*L,-0.5f*L,+0.5f*L};
+    constexpr float pitch[4]={-0.5f*D,+0.5f*D,-0.5f*D,+0.5f*D};
+    constexpr float yaw[4]={-1.0f,-1.0f,+1.0f,+1.0f};
+    if (rp>=0.08f && obs_norm>=0.10f) {
+        for (uint8_t i=0;i<4;i++) {
+            const float w=constrain_float(motor_fault_nominal_prev[i],0.0f,100.0f);
+            if (w<18.0f) { continue; }
+            const float fn=softdrone_thrust_from_w(w);
+            const float mn=softdrone_moment_from_w(w);
+            // Exhaustive one-dimensional fixed-grid search (<= 4*25).
+            // Uses the full nonlinear force AND yaw-moment calibration.
+            // Any candidate must have substantial unsupported thrust.
+            for (uint8_t k=0;k<=24;k++) {
+                const float cap=w*(float(k)/24.0f);
+                const float df=fn-softdrone_thrust_from_w(cap);
+                if (df<0.6f || w-cap<8.0f) { continue; }
+                const float dm=mn-softdrone_moment_from_w(cap);
+                const Vector3f signature={
+                    roll[i]*df,pitch[i]*df,yaw[i]*dm};
+                const float ratio=(obs-signature).length()/
+                                  MAX(obs_norm,1.0e-4f);
+                if (ratio<best_ratio) {
+                    best_ratio=ratio;
+                    best_cap=cap;
+                    best_id=i+1U;
+                    best_force_deficit=df;
+                }
+            }
+        }
+    }
+
+    motor_blind_fit_ratio=best_ratio;
+    motor_fault_residual_ratio=best_ratio;
+    const bool plausible=best_id>=1U &&
+                          best_ratio<0.30f &&
+                          best_force_deficit>=0.6f &&
+                          best_cap < motor_fault_nominal_prev[best_id-1U]-8.0f;
+    if (!plausible) {
+        // Adapt pre-fault reference only while there is no plausible
+        // motor signature, and slowly enough not to track fast compensation.
+        if (motor_fault_candidate_id==0U) {
+            for (uint8_t i=0;i<4;i++) {
+                motor_blind_healthy_pwm[i]+=0.002f*(
+                    constrain_float(motor_fault_nominal_prev[i],0.0f,100.0f)-
+                    motor_blind_healthy_pwm[i]);
+            }
+        }
+        motor_fault_sigma_baseline+=(motor_fault_sigma_filtered-
+                                     motor_fault_sigma_baseline)*0.0005f;
+        motor_fault_candidate_id=0U;
+        motor_fault_confirm_count=0U;
+        motor_blind_consistent_samples=0U;
+        motor_fdi_gate_code=5U;
+        return;
+    }
+
+    if (best_id!=motor_fault_candidate_id) {
+        motor_fault_candidate_id=best_id;
+        motor_fault_confirm_count=1U;
+        motor_blind_consistent_samples=1U;
+        motor_blind_cap_candidate_pwm=best_cap;
+    } else {
+        // Check that the inferred *absolute PWM ceiling* persists. Relative
+        // loss estimates can move when control effort changes, but a fixed
+        // actuator limit should not.
+        if (fabsf(best_cap-motor_blind_cap_candidate_pwm)>10.0f) {
+            motor_fault_confirm_count=1U;
+            motor_blind_consistent_samples=1U;
+            motor_blind_cap_candidate_pwm=best_cap;
+        } else {
+            motor_blind_cap_candidate_pwm+=0.12f*
+                (best_cap-motor_blind_cap_candidate_pwm);
+            if (motor_fault_confirm_count<65535U) {
+                motor_fault_confirm_count++;
+            }
+            motor_blind_consistent_samples=motor_fault_confirm_count;
+        }
+    }
+    // Confidence is based only on residual fit and persistence.
+    motor_blind_confidence=constrain_float(
+        (1.0f-best_ratio/0.30f)*
+        MIN(1.0f,float(motor_fault_confirm_count)/40.0f),0.0f,1.0f);
+    motor_fdi_gate_code=6U;
+    if (motor_fault_confirm_count>=40U &&
+        motor_blind_healthy_pwm[best_id-1U]>=16.0f &&
+        motor_blind_cap_candidate_pwm <
+            motor_blind_healthy_pwm[best_id-1U]-8.0f) {
+        motor_fault_confirmed=true;
+        motor_fault_detected_id=best_id;
+        motor_blind_confirmed_motor=best_id;
+        motor_blind_pre_fault_pwm=motor_blind_healthy_pwm[best_id-1U];
+        motor_blind_cap_est_pwm=constrain_float(
+            motor_blind_cap_candidate_pwm,0.0f,100.0f);
+        motor_fault_loss_estimate_pct=100.0f*constrain_float(
+            1.0f-motor_blind_cap_est_pwm/
+            MAX(motor_blind_pre_fault_pwm,1.0f),0.0f,1.0f);
+        motor_fdi_confirmed_at_ms=AP_HAL::millis();
+        motor_fault_yaw_free_latched=true;
+        motor_fdi_gate_code=8U;
+        GCS_SEND_TEXT(MAV_SEVERITY_WARNING,
+            "Mode29 blind FDI M%u est cap %.1f/100 fit %.2f (HIL)",
+            (unsigned)best_id,(double)motor_blind_cap_est_pwm,
+            (double)best_ratio);
+    }
+#else
+    (void)time_in_this_run;
+#endif
 }
 
 void ModeAdaptive::update_auto_motor_fault_detector(float time_in_this_run)
