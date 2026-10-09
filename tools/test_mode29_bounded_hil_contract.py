@@ -79,7 +79,9 @@ def check_source_contract():
     assert 'constexpr float ramp_pp_s=70.0f' in CPP
     assert 'worsens_braking' in CPP
     assert 'motor_pair_retry_count++' in CPP
-    assert 'motor_pair_loss_pct=MIN(motor_pair_loss_pct,' in CPP
+    # The blind mirror withdraws on estimator disconfirmation; it must
+    # NEVER use known injected loss to determine its own cap.
+    assert 'motor_blind_healthy_pwm[opposite],target,mirror_loss' in CPP
     assert 'motor_bounded_injected_loss_pct-100.0f*0.0025f' in CPP
     assert 'motor_bounded_recovery_cooldown_until_ms' in CPP
     assert 'motor_bounded_yaw_unbrakeable' in CPP
