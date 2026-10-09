@@ -898,7 +898,7 @@ void ModeAdaptive::update_motor_pair_mode(bool motor_degradation_active)
                   (double)motor_pair_loss_pct);
 }
 
-void ModeAdaptive::update_bounded_pair_mode(bool injected_active,
+void ModeAdaptive::update_bounded_pair_mode(bool blind_fault_confirmed,
                                             const VectorN<float, 4> &cmd,
                                             float dt)
 {
@@ -906,8 +906,8 @@ void ModeAdaptive::update_bounded_pair_mode(bool injected_active,
     if (!motor_bounded_enabled_this_run || !motor_pair_enabled_this_run) {
         return;
     }
-    // HIL ORACLE-ASSISTED: use injected motor ID and requested PWM-cap loss
-    // ONLY for synthetic opposite cap admission. Not a blind FDI/FTC claim.
+    // The controller and mirror know ONLY what independent FDI confirmed.
+    // There is no injector truth here, even for motor ID or fault release.
     constexpr float ramp_pp_s=70.0f;
     constexpr float rollback_pp_s=140.0f;
     constexpr uint32_t hold_ms=150U;
@@ -920,21 +920,19 @@ void ModeAdaptive::update_bounded_pair_mode(bool injected_active,
         motor_pair_active=motor_pair_loss_pct>0.001f;
         motor_pair_feasible_since_ms=0U;
     };
-    if (!injected_active || !motor_pwm_cap_latched) {
+    if (!blind_fault_confirmed || !motor_fault_confirmed ||
+        motor_blind_confirmed_motor<1U ||
+        motor_blind_confirmed_motor>4U ||
+        motor_blind_confidence<0.20f ||
+        !isfinite(motor_blind_cap_est_pwm)) {
         withdraw(false);
-        motor_pair_loss_pct=MIN(motor_pair_loss_pct,motor_bounded_injected_loss_pct);
-        motor_pair_active=motor_pair_loss_pct>0.001f;
-        motor_pair_retry_pending=false;
-        // Keep the original full-loss target while withdrawing, otherwise
-        // resetting it to zero would make the opposite cap jump to 100.
         if (!motor_pair_active) {
-            motor_pair_target_loss_pct=0.0f;
             motor_pair_fault_id=0U;
             motor_pair_opposite_id=0U;
+            motor_pair_target_loss_pct=0.0f;
         }
         return;
     }
-
     Vector3f pos;
     const bool nav_valid=ahrs.get_relative_position_NED_origin(pos) &&
                          mode29_finite(pos);
@@ -948,27 +946,26 @@ void ModeAdaptive::update_bounded_pair_mode(bool injected_active,
         withdraw(true);
         return;
     }
-
-    const uint8_t failed=motor_bounded_injected_motor_id-1U;
-    if (failed>3U || motor_pair_inhibited) {
+    const uint8_t failed=motor_blind_confirmed_motor-1U;
+    const uint8_t opposite=failed^1U;
+    if (motor_pair_inhibited) {
         withdraw(true);
         return;
     }
-    const uint8_t opposite=failed^1U;
-    // This is the user-requested *PWM ceiling loss*, NOT the equivalent
-    // thrust loss from the L1 observer.
-    const float target=constrain_float(motor_bounded_injected_loss_pct,0.0f,100.0f);
+    // Derived entirely from the *observed* PWM ceiling and a previously
+    // stored normal hover-command reference. Not injected percentage.
+    const float baseline=MAX(1.0f,motor_blind_pre_fault_pwm);
+    const float target=100.0f*constrain_float(
+        1.0f-motor_blind_cap_est_pwm/baseline,0.0f,1.0f);
     motor_pair_target_loss_pct=target;
     motor_pair_fault_id=failed+1U;
     motor_pair_opposite_id=opposite+1U;
-
     const auto authority=[&](float mirror_loss,float &yaw_lo,
                               float &yaw_hi)->bool {
         float pwm_caps[4]={100.0f,100.0f,100.0f,100.0f};
-        pwm_caps[failed]=constrain_float(
-            motor_pwm_cap_baseline[failed]*(1.0f-0.01f*target),0.0f,100.0f);
+        pwm_caps[failed]=constrain_float(motor_blind_cap_est_pwm,0.0f,100.0f);
         pwm_caps[opposite]=mode29_mirror_pwm_cap(
-            motor_pwm_cap_baseline[opposite],target,mirror_loss);
+            motor_blind_healthy_pwm[opposite],target,mirror_loss);
         return mode29_primary_yaw_interval(cmd,pwm_caps,yaw_lo,yaw_hi);
     };
     float baseline_min=0.0f,baseline_max=0.0f;
@@ -1015,7 +1012,9 @@ void ModeAdaptive::update_bounded_pair_mode(bool injected_active,
     motor_pair_loss_pct=proposed;
     motor_pair_active=motor_pair_loss_pct>0.001f;
 #else
-    (void)injected_active; (void)cmd; (void)dt;
+    (void)blind_fault_confirmed;
+    (void)cmd;
+    (void)dt;
 #endif
 }
 
