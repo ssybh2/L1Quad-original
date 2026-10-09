@@ -161,7 +161,6 @@ bool mode29_primary_interval(const VectorN<float, 4> &cmd,
     constexpr float L=0.28f, D=0.28f;
     const float mx=cmd[1], my=cmd[2], F=cmd[0];
     const float signs[4]={1.0f,1.0f,-1.0f,-1.0f};
-    const float max_f=softdrone_thrust_from_w(100.0f);
     float cap_sum=0.0f;
     for (uint8_t i=0;i<4;i++) {
         if (!isfinite(cmd[i]) || !isfinite(pwm_caps[i]) ||
@@ -473,6 +472,11 @@ bool ModeAdaptive::init(bool ignore_checks)
     motor_bounded_fdi_freeze_samples = 0U;
     motor_bounded_injected_loss_pct = 0.0f;
     motor_bounded_injected_motor_id = 0U;
+    mode29_zero(motor_pwm_last_sent);
+    mode29_zero(motor_pwm_cap_baseline);
+    motor_pwm_last_sent_valid = false;
+    motor_pwm_cap_latched = false;
+    motor_pwm_cap_clipped_samples = 0U;
     motor_bounded_recovery_active = false;
     motor_bounded_recovery_cooldown_until_ms = 0U;
     motor_bounded_fault_seen_this_run = false;
@@ -480,9 +484,10 @@ bool ModeAdaptive::init(bool ignore_checks)
     motor_bounded_yaw_min_nm = 0.0f;
     motor_bounded_yaw_max_nm = 0.0f;
     motor_bounded_yaw_unbrakeable = false;
-    // In HIL mode the bounded pair/retry implementation entirely replaces
-    // old instantaneous paired allocation. Both features remain opt-in,
-    // disabled by default and not approved for propeller-on operation.
+    // HIL PWM-ceiling impairment, *not* an effectiveness multiplier.
+    // Existing deployed flight versions are unchanged. This branch is
+    // a separate unvalidated experimental cap-aware allocator.
+    // Both HIL features remain opt-in and NEVER approved for prop-on use.
 #if !REAL_OR_SITL
     if (motor_bounded_enabled_this_run) {
         GCS_SEND_TEXT(MAV_SEVERITY_CRITICAL,
