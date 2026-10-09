@@ -135,6 +135,21 @@ float softdrone_w_from_thrust(float thrust_n)
     }
     return 0.5f * (lo + hi);
 }
+
+// The paired cap begins at full 0..100 authority; the *final* ceiling
+// is based on the opposite motor's frozen pre-primary-fault PWM.
+// A linear ramp in loss percentage must not abruptly cut 100 down to
+// the old hover PWM on its first paired tick.
+float mode29_mirror_pwm_cap(float frozen_w,float full_loss_pct,
+                            float current_mirror_pct)
+{
+    const float full=constrain_float(full_loss_pct,0.0f,100.0f);
+    if (full<=0.001f) { return 100.0f; }
+    const float end_cap=constrain_float(
+        frozen_w*(1.0f-0.01f*full),0.0f,100.0f);
+    const float alpha=constrain_float(current_mirror_pct/full,0.0f,1.0f);
+    return constrain_float(100.0f+(end_cap-100.0f)*alpha,0.0f,100.0f);
+}
 #endif
 
 // HIL-only allocation diagnostics. Never interpret these static-model
@@ -899,8 +914,10 @@ void ModeAdaptive::update_bounded_pair_mode(bool injected_active,
         motor_pair_loss_pct=MIN(motor_pair_loss_pct,motor_bounded_injected_loss_pct);
         motor_pair_active=motor_pair_loss_pct>0.001f;
         motor_pair_retry_pending=false;
-        motor_pair_target_loss_pct=0.0f;
+        // Keep the original full-loss target while withdrawing, otherwise
+        // resetting it to zero would make the opposite cap jump to 100.
         if (!motor_pair_active) {
+            motor_pair_target_loss_pct=0.0f;
             motor_pair_fault_id=0U;
             motor_pair_opposite_id=0U;
         }
@@ -939,8 +956,8 @@ void ModeAdaptive::update_bounded_pair_mode(bool injected_active,
         float pwm_caps[4]={100.0f,100.0f,100.0f,100.0f};
         pwm_caps[failed]=constrain_float(
             motor_pwm_cap_baseline[failed]*(1.0f-0.01f*target),0.0f,100.0f);
-        pwm_caps[opposite]=constrain_float(
-            motor_pwm_cap_baseline[opposite]*(1.0f-0.01f*mirror_loss),0.0f,100.0f);
+        pwm_caps[opposite]=mode29_mirror_pwm_cap(
+            motor_pwm_cap_baseline[opposite],target,mirror_loss);
         return mode29_primary_yaw_interval(cmd,pwm_caps,yaw_lo,yaw_hi);
     };
     float baseline_min=0.0f,baseline_max=0.0f;
@@ -2021,6 +2038,10 @@ void ModeAdaptive::run()
                     (double)motor_pwm_cap_baseline[idx],
                     (double)motor_degradation_loss_pct);
             }
+            if (motor_bounded_recovery_active) {
+                abort_mode29("HIL PWM-cap injection restarted during release");
+                return;
+            }
             if (motor_bounded_injected_motor_id!=0U &&
                 motor_degradation_motor_id!=motor_bounded_injected_motor_id) {
                 abort_mode29("HIL PWM-cap injection motor changed mid-fault");
@@ -2031,8 +2052,17 @@ void ModeAdaptive::run()
             motor_bounded_recovery_active=false;
         } else if (motor_pwm_cap_latched &&
                    motor_bounded_injected_loss_pct>0.001f) {
+            if (!motor_bounded_recovery_active) {
+                const uint8_t idx=motor_bounded_injected_motor_id-1U;
+                motor_pwm_cap_release_start=constrain_float(
+                    motor_pwm_cap_baseline[idx]*
+                    (1.0f-0.01f*motor_bounded_injected_loss_pct),
+                    0.0f,100.0f);
+                motor_pwm_cap_release_loss=motor_bounded_injected_loss_pct;
+            }
             motor_bounded_recovery_active=true;
-            // Expand PWM ceiling at 100 percentage points/second.
+            // Expand PWM ceiling all the way to 100 continuously at
+            // 100 percentage-points/s over the stored release duration.
             motor_bounded_injected_loss_pct=MAX(
                 0.0f,motor_bounded_injected_loss_pct-100.0f*0.0025f);
             if (motor_bounded_injected_loss_pct<=0.001f) {
@@ -2224,16 +2254,27 @@ void ModeAdaptive::run()
             motor_bounded_injected_motor_id>=1 &&
             motor_bounded_injected_motor_id<=4) {
             const uint8_t idx=motor_bounded_injected_motor_id-1U;
-            injected_cap_pwm[idx]=constrain_float(
-                motor_pwm_cap_baseline[idx]*
-                (1.0f-0.01f*motor_bounded_injected_loss_pct),0.0f,100.0f);
+            if (motor_bounded_recovery_active) {
+                const float alpha=1.0f-
+                    motor_bounded_injected_loss_pct/
+                    MAX(motor_pwm_cap_release_loss,0.001f);
+                injected_cap_pwm[idx]=constrain_float(
+                    motor_pwm_cap_release_start+
+                    (100.0f-motor_pwm_cap_release_start)*
+                    constrain_float(alpha,0.0f,1.0f),0.0f,100.0f);
+            } else {
+                injected_cap_pwm[idx]=constrain_float(
+                    motor_pwm_cap_baseline[idx]*
+                    (1.0f-0.01f*motor_bounded_injected_loss_pct),
+                    0.0f,100.0f);
+            }
         }
         if (motor_pwm_cap_latched && motor_pair_active &&
             motor_pair_opposite_id>=1 && motor_pair_opposite_id<=4) {
             const uint8_t idx=motor_pair_opposite_id-1U;
-            injected_cap_pwm[idx]=constrain_float(
-                motor_pwm_cap_baseline[idx]*
-                (1.0f-0.01f*motor_pair_loss_pct),0.0f,100.0f);
+            injected_cap_pwm[idx]=mode29_mirror_pwm_cap(
+                motor_pwm_cap_baseline[idx],motor_pair_target_loss_pct,
+                motor_pair_loss_pct);
         }
         Mode29BoundedDiag allocation;
         if (!mode29_bounded_allocate(requested, injected_cap_pwm,
