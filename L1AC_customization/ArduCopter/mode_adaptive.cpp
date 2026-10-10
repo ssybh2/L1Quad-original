@@ -1229,6 +1229,206 @@ void ModeAdaptive::update_auto_motor_fault_detector(float time_in_this_run)
         sigma_m_hat_prev[3]
     };
 
+#if REAL_OR_SITL
+    if (motor_bounded_enabled_this_run) {
+        // EXPERIMENTAL BLIND PWM-RATIO FDI, HIL ONLY.
+        // Allowed: previous PRE-injector commands and L1/IMU moment residual.
+        // Forbidden: injection ID/loss/onset/release, post-injector output.
+        constexpr float LP_ALPHA = 0.05f;       // 400Hz, ~49ms
+        constexpr float ONSET_RP_NM = 0.08f;
+        constexpr float ONSET_TOTAL_NM = 0.10f;
+        constexpr uint16_t CONFIRM_TICKS = 24U; // ~60ms persistence
+        constexpr float FIT_MAX = 0.36f;
+        constexpr float ID_MARGIN_MIN = 0.06f;
+        motor_fdi_applied_delta_pct=0.0f;
+        motor_fdi_raw_innovation_pct=0.0f;
+        motor_fdi_gate_code=0U;
+
+        const bool ready=motors->armed() && trajIndex==0 &&
+            !g.LandFlag && g.l1enable!=0 &&
+            time_in_this_run >= takeoffTime+settleTime &&
+            motor_fault_nominal_prev_valid;
+        if (!mode29_finite(sigma_now)) {
+            motor_fdi_gate_code=3U;
+            return;
+        }
+        if (!motor_fault_sigma_valid) {
+            motor_fault_sigma_filtered=sigma_now;
+            motor_fault_sigma_baseline=sigma_now;
+            motor_fault_sigma_valid=true;
+            motor_fdi_gate_code=10U;
+            return;
+        }
+        motor_fault_sigma_filtered+=
+            (sigma_now-motor_fault_sigma_filtered)*LP_ALPHA;
+        if (!ready) {
+            motor_fault_sigma_baseline+=
+                (motor_fault_sigma_filtered-motor_fault_sigma_baseline)*0.02f;
+            motor_pwm_fdi_started=false;
+            motor_fault_candidate_id=0U;
+            motor_fault_confirm_count=0U;
+            motor_pwm_fdi_confidence=0.0f;
+            motor_fdi_gate_code=10U;
+            return;
+        }
+        const Vector3f obs=
+            motor_fault_sigma_filtered-motor_fault_sigma_baseline;
+        const float obs_norm=obs.length();
+        const float obs_rp=sqrtf(obs.x*obs.x+obs.y*obs.y);
+        if (!motor_pwm_fdi_started) {
+            if (obs_rp<ONSET_RP_NM || obs_norm<ONSET_TOTAL_NM) {
+                motor_fault_sigma_baseline+=
+                    (motor_fault_sigma_filtered-
+                     motor_fault_sigma_baseline)*0.0005f;
+                motor_fdi_gate_code=4U;
+                return;
+            }
+            motor_pwm_fdi_started=true;
+            motor_pwm_no_fit_ticks=0U;
+            for (uint8_t i=0U;i<4U;i++) {
+                for (uint8_t k=0U;k<MOTOR_PWM_FDI_GRID;k++) {
+                    motor_pwm_hypothesis_lp[i][k]=
+                        Vector3f{0.0f,0.0f,0.0f};
+                }
+            }
+        }
+
+        // Every hypothesis predicts the MISSING thrust and yaw reaction
+        // moment caused by applying eta_pwm to CURRENT pre-injector PWM.
+        // Pass each modeled signature through the same LP dynamics as
+        // the measured L1 innovation: an instantaneous force mismatch
+        // must not be matched to an already-filtered old observation.
+        constexpr float roll[4]={+0.14f,-0.14f,-0.14f,+0.14f};
+        constexpr float pitch[4]={-0.14f,+0.14f,-0.14f,+0.14f};
+        constexpr float yaw[4]={-1.0f,-1.0f,+1.0f,+1.0f};
+        float by_motor_fit[4]={1000.0f,1000.0f,1000.0f,1000.0f};
+        float by_motor_loss[4]={0.0f,0.0f,0.0f,0.0f};
+        float best_w[4]={0.0f,0.0f,0.0f,0.0f};
+        for (uint8_t i=0U;i<4U;i++) {
+            const float w=constrain_float(
+                motor_fault_nominal_prev[i],0.0f,100.0f);
+            best_w[i]=w;
+            const float f_nom=softdrone_thrust_from_w(w);
+            const float m_nom=softdrone_moment_from_w(w);
+            for (uint8_t k=0U;k<MOTOR_PWM_FDI_GRID;k++) {
+                const float loss=float(k)/float(MOTOR_PWM_FDI_GRID-1U);
+                const float actual_w=(1.0f-loss)*w;
+                const float df=f_nom-softdrone_thrust_from_w(actual_w);
+                const float dm=m_nom-softdrone_moment_from_w(actual_w);
+                const Vector3f h={roll[i]*df,pitch[i]*df,yaw[i]*dm};
+                Vector3f &pred=motor_pwm_hypothesis_lp[i][k];
+                pred+=(h-pred)*LP_ALPHA;
+                const float ratio=(obs-pred).length()/
+                                  MAX(obs_norm,ONSET_TOTAL_NM);
+                if (ratio<by_motor_fit[i]) {
+                    by_motor_fit[i]=ratio;
+                    by_motor_loss[i]=100.0f*loss;
+                }
+            }
+        }
+        uint8_t best=0U;
+        for (uint8_t i=1U;i<4U;i++) {
+            if (by_motor_fit[i]<by_motor_fit[best]) {
+                best=i;
+            }
+        }
+        float next_fit=1000.0f;
+        for (uint8_t i=0U;i<4U;i++) {
+            if (i!=best) { next_fit=MIN(next_fit,by_motor_fit[i]); }
+        }
+        const float gap=next_fit-by_motor_fit[best];
+        const bool observation_valid=obs_rp>=ONSET_RP_NM &&
+            obs_norm>=ONSET_TOTAL_NM && best_w[best]>=18.0f &&
+            by_motor_loss[best]>=10.0f;
+        const bool model_fit=observation_valid &&
+            by_motor_fit[best]<FIT_MAX && gap>ID_MARGIN_MIN;
+        motor_fault_residual_ratio=by_motor_fit[best];
+        motor_fdi_excitation_w=best_w[best];
+        motor_pwm_fdi_confidence=constrain_float(
+            (1.0f-by_motor_fit[best]/FIT_MAX) *
+            MIN(1.0f,gap/0.20f),0.0f,1.0f);
+        if (!motor_fault_confirmed) {
+            if (!model_fit) {
+                motor_fault_candidate_id=0U;
+                motor_fault_confirm_count=0U;
+                motor_pwm_fdi_confidence=0.0f;
+                motor_fdi_gate_code=5U;
+                if (motor_pwm_no_fit_ticks<65535U) {
+                    motor_pwm_no_fit_ticks++;
+                }
+                // Discard a failed transient hypothesis, but only if no
+                // motor was ever confirmed. No injector-driven reset.
+                if (motor_pwm_no_fit_ticks>=200U) {
+                    motor_pwm_fdi_started=false;
+                    motor_pwm_no_fit_ticks=0U;
+                    motor_fault_sigma_baseline=motor_fault_sigma_filtered;
+                }
+                return;
+            }
+            motor_pwm_no_fit_ticks=0U;
+            const uint8_t id=best+1U;
+            if (motor_fault_candidate_id!=id ||
+                fabsf(motor_pwm_candidate_loss_pct-
+                      by_motor_loss[best])>20.0f) {
+                motor_fault_candidate_id=id;
+                motor_pwm_candidate_loss_pct=by_motor_loss[best];
+                motor_fault_confirm_count=1U;
+            } else {
+                motor_pwm_candidate_loss_pct+=0.10f*
+                    (by_motor_loss[best]-motor_pwm_candidate_loss_pct);
+                if (motor_fault_confirm_count<65535U) {
+                    motor_fault_confirm_count++;
+                }
+            }
+            motor_fault_loss_estimate_pct=motor_pwm_candidate_loss_pct;
+            motor_fdi_gate_code=6U;
+            if (motor_fault_confirm_count>=CONFIRM_TICKS) {
+                motor_fault_confirmed=true;
+                motor_fault_detected_id=id;
+                motor_fault_yaw_free_latched=true;
+                motor_fdi_confirmed_at_ms=AP_HAL::millis();
+                motor_fdi_gate_code=8U;
+                GCS_SEND_TEXT(MAV_SEVERITY_WARNING,
+                    "Mode29 blind PWM FDI M%u loss %.1f%% fit %.2f HIL",
+                    (unsigned)id,
+                    (double)motor_fault_loss_estimate_pct,
+                    (double)by_motor_fit[best]);
+            }
+            return;
+        }
+
+        // Continue updating severity AFTER identity confirmation. Identity
+        // remains latched; do not pretend the fault has recovered just
+        // because the experimental injector has been switched off.
+        const uint8_t confirmed=motor_fault_detected_id;
+        if (confirmed<1U || confirmed>4U) {
+            motor_fdi_gate_code=3U;
+            return;
+        }
+        const uint8_t idx=confirmed-1U;
+        motor_fdi_excitation_w=best_w[idx];
+        if (best_w[idx]<18.0f ||
+            by_motor_fit[idx]>0.42f ||
+            obs_norm<ONSET_TOTAL_NM) {
+            motor_fdi_gate_code=9U;
+            motor_bounded_fdi_freeze_samples++;
+            return;
+        }
+        const float old_pct=motor_fault_loss_estimate_pct;
+        const float delta=constrain_float(
+            0.05f*(by_motor_loss[idx]-old_pct),-0.25f,+0.25f);
+        motor_fault_loss_estimate_pct=constrain_float(
+            old_pct+delta,0.0f,100.0f);
+        motor_fdi_raw_innovation_pct=
+            by_motor_loss[idx]-old_pct;
+        motor_fdi_applied_delta_pct=
+            motor_fault_loss_estimate_pct-old_pct;
+        motor_fault_residual_ratio=by_motor_fit[idx];
+        motor_fdi_gate_code=8U;
+        return;
+    }
+#endif
+
     if (!mode29_finite(sigma_now)) {
         motor_fault_candidate_id = 0;
         motor_fault_confirm_count = 0;
