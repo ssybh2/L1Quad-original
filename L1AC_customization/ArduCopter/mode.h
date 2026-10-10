@@ -2065,6 +2065,8 @@ private:
     uint16_t motor_pwm_no_fit_ticks = 0U;
     float motor_pwm_candidate_loss_pct = 0.0f;
     float motor_pwm_fdi_confidence = 0.0f;
+    float motor_pwm_fdi_loss_lo_pct = 0.0f;
+    float motor_pwm_fdi_loss_hi_pct = 100.0f;
 
     // HIL-only estimator diagnostics and observer-delay anti-windup.
     // Kept separate from legacy FDI when M29_BALLOC=0.
