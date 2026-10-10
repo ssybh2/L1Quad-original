@@ -2056,6 +2056,16 @@ private:
     VectorN<float, 4> motor_fault_nominal_prev;
     bool motor_fault_nominal_prev_valid = false;
 
+    // PWM-RATIO BLIND FDI (M29_BALLOC=1 only): all of these are estimated
+    // exclusively from pre-injector commands and measured L1/IMU innovations.
+    // Injection ID/loss, post-injector PWM, and release signals are forbidden.
+    static constexpr uint8_t MOTOR_PWM_FDI_GRID = 21U; // 0..100% in 5pp steps
+    Vector3f motor_pwm_hypothesis_lp[4][MOTOR_PWM_FDI_GRID];
+    bool motor_pwm_fdi_started = false;
+    uint16_t motor_pwm_no_fit_ticks = 0U;
+    float motor_pwm_candidate_loss_pct = 0.0f;
+    float motor_pwm_fdi_confidence = 0.0f;
+
     // HIL-only estimator diagnostics and observer-delay anti-windup.
     // Kept separate from legacy FDI when M29_BALLOC=0.
     uint32_t motor_fdi_confirmed_at_ms = 0U;
