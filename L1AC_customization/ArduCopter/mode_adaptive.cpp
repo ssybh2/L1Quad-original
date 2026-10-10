@@ -2486,6 +2486,53 @@ void ModeAdaptive::run()
         motorPWMCommanded[i] = constrain_float(motorPWMCommanded[i], 0.0f, 100.0f);
     }
 
+#if REAL_OR_SITL
+    if (motor_bounded_enabled_this_run) {
+        // SECOND GUARD: limit the *actual commanded* normalized PWM step,
+        // including unforeseen jumps caused by geometric/L1 wrench changes.
+        // At 400Hz, 0.8w/tick = 8us/tick at the Mode29 1000..2000us map.
+        // Keep the nominal predictor aligned with the post-slew command.
+        constexpr float PWM_MAX_NOMINAL_STEP_W=0.8f;
+        motor_pwm_last_nominal_jump_w=0.0f;
+        if (motor_pwm_last_nominal_valid && motor_fault_confirmed) {
+            for (uint8_t i=0;i<4;i++) {
+                const float prev=motor_pwm_last_nominal[i];
+                motorPWMCommanded[i]=prev+constrain_float(
+                    motorPWMCommanded[i]-prev,
+                    -PWM_MAX_NOMINAL_STEP_W,+PWM_MAX_NOMINAL_STEP_W);
+                motor_pwm_last_nominal_jump_w=MAX(
+                    motor_pwm_last_nominal_jump_w,
+                    fabsf(motorPWMCommanded[i]-prev));
+            }
+        }
+        motor_pwm_last_nominal=motorPWMCommanded;
+        motor_pwm_last_nominal_valid=true;
+
+        // The solver's diagnostics referred to the unconstrained w.
+        // Recompute the *achievable* wrench from the issued, slew-limited
+        // nominal commands and BLIND estimated PWM losses.
+        float achieved_f=0.0f,achieved_rx=0.0f,achieved_py=0.0f;
+        constexpr float rc[4]={-0.14f,+0.14f,+0.14f,-0.14f};
+        constexpr float pc[4]={+0.14f,-0.14f,+0.14f,-0.14f};
+        for (uint8_t i=0;i<4;i++) {
+            const float physical_pwm=
+                motor_pwm_alloc_remaining[i]*motorPWMCommanded[i];
+            const float fi=softdrone_thrust_from_w(physical_pwm);
+            achieved_f+=fi; achieved_rx+=rc[i]*fi;
+            achieved_py+=pc[i]*fi;
+        }
+        const VectorN<float,4> requested=
+            thrustMomentCmd+L1thrustMomentCmd;
+        motor_bounded_predicted_collective_n=achieved_f;
+        motor_bounded_roll_error_nm=achieved_rx-requested[1];
+        motor_bounded_pitch_error_nm=achieved_py-requested[2];
+        motor_bounded_primary_saturated=
+            fabsf(achieved_f-requested[0])>0.005f ||
+            fabsf(motor_bounded_roll_error_nm)>0.005f ||
+            fabsf(motor_bounded_pitch_error_nm)>0.005f;
+    }
+#endif
+
     motor_fault_nominal_prev = motorPWMCommanded;
     motor_fault_nominal_prev_valid = true;
 #if REAL_OR_SITL
@@ -2631,6 +2678,23 @@ void ModeAdaptive::run()
 
     // Independent blind estimate. L1DG's injected values are for offline
     // validation only and are never read by estimator or allocator.
+    // Separate diagnosed PWM severity from the *ramped* effective PWM
+    // loss currently assumed by the allocator.
+    float alloc_loss_pct=0.0f;
+    if (motor_fault_detected_id>=1U &&
+        motor_fault_detected_id<=4U) {
+        alloc_loss_pct=100.0f*(
+            1.0f-motor_pwm_alloc_remaining[motor_fault_detected_id-1U]);
+    }
+    AP::logger().Write("L1TR", "motor,est,alloc,step,conf,sat",
+                       "BffffB",
+                       (uint8_t)motor_fault_detected_id,
+                       (double)motor_fault_loss_estimate_pct,
+                       (double)alloc_loss_pct,
+                       (double)motor_pwm_last_nominal_jump_w,
+                       (double)motor_pwm_fdi_confidence,
+                       (uint8_t)motor_bounded_primary_saturated);
+
     AP::logger().Write("L1PW", "id,pct,fit,conf,w,lo,hi,gate,sat",
                        "BffffffBB",
                        (uint8_t)motor_fault_detected_id,
