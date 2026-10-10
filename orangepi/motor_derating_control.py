@@ -36,7 +36,7 @@ def parse_args():
 
     en = sub.add_parser("enable")
     en.add_argument("--motor", type=int, choices=(1, 2, 3, 4), required=True)
-    en.add_argument("--loss", type=float, required=True, help="thrust-effectiveness loss percent, 0 <= loss <= 100")
+    en.add_argument("--loss", type=float, required=True, help="loss percent: normalized PWM ratio when M29_BALLOC=1; legacy thrust loss when M29_BALLOC=0, 0..100")
     en.add_argument("--duration", type=float, default=5.0, help="seconds; 0 means until Ctrl+C")
     en.add_argument("--rate", type=float, default=10.0)
     en.add_argument("--keep-yaw", action="store_true", help="keep fixed-yaw control instead of requesting yaw-free mode")
