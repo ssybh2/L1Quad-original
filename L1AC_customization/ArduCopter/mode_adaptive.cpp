@@ -1140,6 +1140,15 @@ ModeAdaptive::GainScheduleSet ModeAdaptive::gain_schedule_at_loss(float loss_pct
 
 void ModeAdaptive::update_gain_schedule(bool motor_degradation_active)
 {
+    // Old gain anchors calibrate THRUST loss, not normalized PWM loss.
+    // Also disallow injected-truth scheduling in blind experimental HIL.
+    if (motor_bounded_enabled_this_run) {
+        gain_schedule_loss_raw_pct=0.0f;
+        gain_schedule_loss_sched_pct=0.0f;
+        gain_schedule_confidence=0.0f;
+        gain_schedule_active=gain_schedule_at_loss(0.0f);
+        return;
+    }
     const int8_t mode = constrain_int16((int16_t)g.m29_gs_mode, 0, 2);
     float raw_loss = 0.0f;
     float confidence = 0.0f;
@@ -1967,11 +1976,9 @@ void ModeAdaptive::run()
             if (motor_bounded_injected_loss_pct<=0.001f) {
                 motor_bounded_injected_loss_pct=0.0f;
                 motor_bounded_recovery_active=false;
-                const bool hold_yaw_free=motor_fault_yaw_free_latched;
-                clear_auto_motor_fault();
-                motor_fault_yaw_free_latched=hold_yaw_free;
-                motor_bounded_recovery_cooldown_until_ms=
-                    motor_deg_now_ms+2000U;
+                // Only the HIL plant knows injected release. No reset or
+                // fault recovery signal is supplied to blind FDI/allocator.
+                motor_bounded_recovery_cooldown_until_ms=0U;
             }
         }
     }
@@ -2007,10 +2014,10 @@ void ModeAdaptive::run()
                        (double)gain_schedule_active.koz,
                        (double)gain_schedule_active.max_tilt_deg);
 
-    const bool yaw_free_active =
-        motor_fault_yaw_free_latched ||
-        (motor_degradation_active && motor_degradation_yaw_free) ||
-        (motor_bounded_enabled_this_run && motor_bounded_recovery_active);
+    const bool yaw_free_active = motor_bounded_enabled_this_run ?
+        motor_fault_yaw_free_latched :
+        (motor_fault_yaw_free_latched ||
+         (motor_degradation_active && motor_degradation_yaw_free));
 
     if (yaw_free_active) {
         // Keep estimating yaw, but stop asking the aircraft to return to a
@@ -2037,7 +2044,9 @@ void ModeAdaptive::run()
         // Controlled lab-fault guard applies during injection AND recovery,
         // independent of the failure percentage. Abort the experiment after
         // persistent loss of position, not on a single noisy EKF frame.
-        motor_bounded_fault_seen_this_run |= motor_degradation_active;
+        // Containment after hover is independent of injector onset.
+        motor_bounded_fault_seen_this_run |=
+            timeInThisRun >= (takeoffTime + settleTime);
         if (motor_bounded_fault_seen_this_run) {
             Vector3f position;
             if (!ahrs.get_relative_position_NED_origin(position) ||
@@ -2141,31 +2150,18 @@ void ModeAdaptive::run()
             motor_pair_active || motor_fault_yaw_free_latched) {
             requested[3]=constrain_float(-0.045f*omega.z,-0.15f,0.15f);
         }
-        // Dynamic admission uses the same current F/Mx/My request as the
-        // bounded mixer. Transient infeasibility never permanently latches.
-        update_bounded_pair_mode(motor_degradation_active,requested,0.0025f);
-        float effectiveness[4] = {1.0f,1.0f,1.0f,1.0f};
-        // During intentional fault-injection release, known applied
-        // effectiveness and command compensation are staged together.
-        // This is a HIL injection protocol, not real unknown fault recovery.
-        if (!motor_degradation_active && motor_bounded_recovery_active &&
-            motor_bounded_injected_motor_id>=1 &&
-            motor_bounded_injected_motor_id<=4) {
-            effectiveness[motor_bounded_injected_motor_id-1U]=
-                1.0f-0.01f*motor_bounded_injected_loss_pct;
-        } else if (motor_fault_confirmed &&
-                   motor_fault_detected_id>=1 && motor_fault_detected_id<=4) {
-            effectiveness[motor_fault_detected_id-1U]=
+        // Strict firewall: use only independent blind FDI estimates.
+        // The experiment injector's known motor, loss and release are NEVER
+        // consulted when computing the controller's available authority.
+        float pwm_remaining[4]={1.0f,1.0f,1.0f,1.0f};
+        if (motor_fault_confirmed &&
+            motor_fault_detected_id>=1 && motor_fault_detected_id<=4) {
+            pwm_remaining[motor_fault_detected_id-1U]=
                 1.0f-0.01f*constrain_float(
                     motor_fault_loss_estimate_pct,0.0f,100.0f);
         }
-        if (motor_pair_active && motor_pair_opposite_id>=1 &&
-            motor_pair_opposite_id<=4) {
-            effectiveness[motor_pair_opposite_id-1U]=
-                1.0f-0.01f*constrain_float(motor_pair_loss_pct,0.0f,100.0f);
-        }
         Mode29BoundedDiag allocation;
-        if (!mode29_bounded_allocate(requested, effectiveness,
+        if (!mode29_bounded_allocate(requested, pwm_remaining,
                                      motorPWMCommanded, allocation)) {
             abort_mode29("HIL bounded allocator failed");
             return;
@@ -2223,6 +2219,31 @@ void ModeAdaptive::run()
 
     motor_fault_nominal_prev = motorPWMCommanded;
     motor_fault_nominal_prev_valid = true;
+#if REAL_OR_SITL
+    if (motor_bounded_enabled_this_run && g.l1enable != 0) {
+        // The predictor must track attainable PRE-INJECTOR wrench, rather
+        // than the (possibly saturated) desired wrench. The plant-side
+        // injected PWM is forbidden here.
+        VectorN<float,4> nominal_achieved;
+        mode29_zero(nominal_achieved);
+        constexpr float rx[4]={-0.14f,+0.14f,+0.14f,-0.14f};
+        constexpr float py[4]={+0.14f,-0.14f,+0.14f,-0.14f};
+        constexpr float mz[4]={+1.0f,+1.0f,-1.0f,-1.0f};
+        for (uint8_t i=0;i<4;i++) {
+            const float fi=softdrone_thrust_from_w(motorPWMCommanded[i]);
+            const float mi=softdrone_moment_from_w(motorPWMCommanded[i]);
+            nominal_achieved[0]+=fi;
+            nominal_achieved[1]+=rx[i]*fi;
+            nominal_achieved[2]+=py[i]*fi;
+            nominal_achieved[3]+=mz[i]*mi;
+        }
+        if (mode29_finite(nominal_achieved)) {
+            for (uint8_t i=0;i<4;i++) {
+                u_b_prev[i]=nominal_achieved[i]-u_ad_prev[i];
+            }
+        }
+    }
+#endif
 
     VectorN<float, 4> motorPWM = motorPWMCommanded;
 
@@ -2233,6 +2254,12 @@ void ModeAdaptive::run()
         const float effectiveness =
             1.0f - 0.01f * constrain_float(loss_pct, 0.0f, 100.0f);
         const float w_nom = motorPWMCommanded[motor_index];
+        if (motor_bounded_enabled_this_run) {
+            // HIL plant ONLY: applied normalized PWM is scaled directly.
+            motorPWM[motor_index]=constrain_float(
+                effectiveness*w_nom,0.0f,100.0f);
+            return;
+        }
 #if (!REAL_OR_SITL)
         const float deg_a_F = 0.0014597f;
         const float deg_b_F = 0.043693f;
@@ -2332,6 +2359,20 @@ void ModeAdaptive::run()
                        (uint8_t)motor_fdi_gate_code,
                        (uint32_t)motor_fdi_guarded_cycles,
                        (double)motor_fault_loss_estimate_pct);
+
+    // Independent blind estimate. L1DG's injected values are for offline
+    // validation only and are never read by estimator or allocator.
+    AP::logger().Write("L1PW", "id,pct,fit,conf,w,gate,sat",
+                       "BffffBB",
+                       (uint8_t)motor_fault_detected_id,
+                       (double)motor_fault_loss_estimate_pct,
+                       (double)motor_fault_residual_ratio,
+                       (double)motor_pwm_fdi_confidence,
+                       (double)(motor_fault_detected_id>=1U &&
+                                motor_fault_detected_id<=4U ?
+                                motor_fault_nominal_prev[motor_fault_detected_id-1U] : 0.0f),
+                       (uint8_t)motor_fdi_gate_code,
+                       (uint8_t)motor_bounded_primary_saturated);
 
     AP::logger().Write("L1BA", "ena,sat,Freq,Fpred,Er,Ep,Freeze",
                        "BBffffI",
