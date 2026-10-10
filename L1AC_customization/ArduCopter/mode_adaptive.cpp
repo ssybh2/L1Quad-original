@@ -161,12 +161,11 @@ bool mode29_primary_interval(const VectorN<float, 4> &cmd,
     constexpr float L=0.28f, D=0.28f;
     const float mx=cmd[1], my=cmd[2], F=cmd[0];
     const float signs[4]={1.0f,1.0f,-1.0f,-1.0f};
-    const float max_f=softdrone_thrust_from_w(100.0f);
     float cap_sum=0.0f;
     for (uint8_t i=0;i<4;i++) {
         if (!isfinite(cmd[i]) || !isfinite(eta[i]) ||
             eta[i]<0.0f || eta[i]>1.0f) { return false; }
-        cap_sum+=eta[i]*max_f;
+        cap_sum+=softdrone_thrust_from_w(100.0f*eta[i]);
     }
     if (F<-0.002f || F>cap_sum+0.002f) { return false; }
     base[0]=0.25f*F-mx/(2.0f*L)+my/(2.0f*D);
@@ -192,11 +191,10 @@ bool mode29_primary_yaw_interval(const VectorN<float, 4> &cmd,
     float lo,hi,base[4];
     if (!mode29_primary_interval(cmd,eta,lo,hi,base)) { return false; }
     const float sign[4]={1.0f,1.0f,-1.0f,-1.0f};
-    const float cap=softdrone_thrust_from_w(100.0f);
     const auto moment_at=[&](float s) -> float {
         float out=0.0f;
         for (uint8_t i=0;i<4;i++) {
-            const float fi=constrain_float(base[i]+s*sign[i],0.0f,eta[i]*cap);
+            const float fi=constrain_float(base[i]+s*sign[i],0.0f,softdrone_thrust_from_w(100.0f*eta[i]));
             out+=sign[i]*softdrone_moment_from_w(
                 softdrone_w_from_thrust(fi));
         }
@@ -233,7 +231,7 @@ bool mode29_bounded_allocate(const VectorN<float, 4> &desired,
             eta[i] < 0.0f || eta[i] > 1.0f) {
             return false;
         }
-        cap[i] = eta[i] * max_f;
+        cap[i] = softdrone_thrust_from_w(100.0f * eta[i]);
         max_total += cap[i];
     }
     const float F = constrain_float(desired[0], 0.0f, max_total);
@@ -403,10 +401,11 @@ bool mode29_bounded_allocate(const VectorN<float, 4> &desired,
     float achieved_f=0.0f,achieved_mx=0.0f,achieved_my=0.0f;
     for (uint8_t i=0; i<4; i++) {
         const float f=constrain_float(base[i]+s*sign[i],0.0f,cap[i]);
-        // If effectiveness is zero, never divide by eta.
-        const float nominal=(eta[i]>1.0e-6f) ? f/eta[i] : 0.0f;
-        w[i]=constrain_float(softdrone_w_from_thrust(nominal),0.0f,100.0f);
-        const float actual=eta[i]*softdrone_thrust_from_w(w[i]);
+        // PWM-RATIO: physical f = F_model(eta_pwm*w_nominal).
+        const float physical_pwm=softdrone_w_from_thrust(f);
+        w[i]=(eta[i]>1.0e-6f) ?
+            constrain_float(physical_pwm/eta[i],0.0f,100.0f) : 0.0f;
+        const float actual=softdrone_thrust_from_w(eta[i]*w[i]);
         achieved_f+=actual; achieved_mx+=r[i]*actual; achieved_my+=p[i]*actual;
     }
     diag.requested_f=desired[0];
@@ -494,9 +493,12 @@ bool ModeAdaptive::init(bool ignore_checks)
         return false;
     }
 #endif
+    // PWM-ratio blind estimator is single-fault only. Reject synthetic pairs
+    // instead of admitting them using the injector's ground truth.
     if (motor_bounded_enabled_this_run && motor_pair_enabled_this_run) {
-        GCS_SEND_TEXT(MAV_SEVERITY_WARNING,
-                      "Mode29 HIL: progressive bounded-pair experiment only");
+        GCS_SEND_TEXT(MAV_SEVERITY_CRITICAL,
+                      "Mode29 PWM-ratio HIL requires M29_PAIR_EN=0");
+        return false;
     }
 
     if (!ahrs.have_inertial_nav()) {
@@ -696,6 +698,15 @@ void ModeAdaptive::clear_auto_motor_fault()
     motor_fault_sigma_valid = false;
     mode29_zero(motor_fault_nominal_prev);
     motor_fault_nominal_prev_valid = false;
+    motor_pwm_fdi_started = false;
+    motor_pwm_no_fit_ticks = 0U;
+    motor_pwm_candidate_loss_pct = 0.0f;
+    motor_pwm_fdi_confidence = 0.0f;
+    for (uint8_t i=0U;i<4U;i++) {
+        for (uint8_t k=0U;k<MOTOR_PWM_FDI_GRID;k++) {
+            motor_pwm_hypothesis_lp[i][k] = Vector3f{0.0f,0.0f,0.0f};
+        }
+    }
     motor_fdi_confirmed_at_ms = 0U;
     motor_fdi_guarded_cycles = 0U;
     motor_fdi_raw_innovation_pct = 0.0f;
@@ -1885,7 +1896,8 @@ void ModeAdaptive::run()
     // untouched:
     //   RC9  : <=1200 disable, >=1800 enable
     //   RC10 : motor selector (1..4)
-    //   RC11 : 1000..2000 => 0..100% thrust-effectiveness loss
+    //   RC11 : 1000..2000 => 0..100% normalized PWM loss when
+    //           M29_BALLOC=1 (legacy M29_BALLOC=0 retains thrust loss)
     //   RC12 : <=1200 keep yaw control, >=1800 yaw-free mode
     RC_Channel *deg_enable_ch = rc().channel(8);
     RC_Channel *deg_motor_ch = rc().channel(9);
