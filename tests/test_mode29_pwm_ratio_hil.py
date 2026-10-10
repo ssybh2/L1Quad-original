@@ -95,12 +95,20 @@ class PwmRatioModelTests(unittest.TestCase):
         # Ideal noiseless observation only; not a delay-performance promise.
         cmds=(42.,39.,45.,41.)
         for motor in range(4):
-            for loss in (.2, .4, .6, .8, 1.0):
+            for loss in (.2, .4, .6, .8):
                 residual=missing_signature(motor,cmds[motor],loss)
                 fit, selected, estimated=infer_single_sample(residual,cmds)
                 self.assertEqual(selected,motor)
                 self.assertAlmostEqual(estimated,loss,places=6)
                 self.assertLess(fit,1e-8)
+
+    def test_extreme_loss_cannot_be_identified_below_deadzone(self):
+        # Physical observability limit: nominal w=42 and 90% loss yields
+        # actual w=4.2, below the thrust and reaction-torque dead zones.
+        # 90% and 100% produce IDENTICAL wrench: no estimator can tell.
+        a=missing_signature(0,42.,.9)
+        b=missing_signature(0,42.,1.)
+        self.assertEqual(a,b)
 
     def test_no_fault_produces_zero_fault_signature(self):
         for i,w in enumerate((35.,40.,50.,60.)):
