@@ -22,6 +22,8 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m unittest discover -s tests -p 'test_mode29_pwm_ratio_hil.py' -v
+          # Dead-zone observability regression: unlike a naive ratio
+          # estimator, 90% and 100% PWM loss can be indistinguishable.
           grep -q 'GSCALAR(m29_balloc_en, "M29_BALLOC", 0)' L1AC_customization/ArduCopter/Parameters.cpp
           grep -q 'Mode29 PWM-ratio HIL requires M29_PAIR_EN=0' L1AC_customization/ArduCopter/mode_adaptive.cpp
           grep -q 'MOTOR_PWM_FDI_GRID = 21U' L1AC_customization/ArduCopter/mode.h
