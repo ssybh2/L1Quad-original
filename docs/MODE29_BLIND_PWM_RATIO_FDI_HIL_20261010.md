@@ -81,6 +81,59 @@ Control allocation uses `l_hat` only *after motor ID confirmation*; before then 
 - `L1GS`: effective baseline gain mode for HIL.
 - The injected truth in logs is **for offline grading only**.
 
+## Run76-inspired transient-bias and smooth-allocation patch (2026-10-10)
+
+Historical Run76 had three M1 30% PWM-ratio-loss experiments: the previous FDI
+estimated ~42%-43% at confirmation and the controller abruptly raised M1 PWM
+when the allocator switched from the healthy model to estimated remaining PWM.
+
+**Blind onset hypothesis bootstrap.** The L1 moment residual exceeded its
+onset threshold around 47ms *after* it had already started accumulating. The
+old candidate-filter bank restarted all candidate responses at zero, introducing
+a false extra observation lag. At first valid observer threshold crossing, each
+candidate response `h_i(w,loss)` now starts at the bounded least-squares
+projection of the ALREADY-OBSERVED residual:
+`alpha_i=clip((obs dot h_i)/(h_i dot h_i),0,1)`,
+`candidate_lp_i=alpha_i*h_i`. This state uses **only observed L1 residual and
+pre-injector nominal PWM**, not the known injector onset or fault magnitude.
+The same per-tick LPF and motor-ID consistency checks follow.
+
+A separate OFFLINE replay of the 3 Run76 L1FD and L1DG streams, using the same
+model and ~400Hz filter, gave the following approximate confirmation estimates
+(old -> bootstrapped): 42.4% -> 33.5%, 42.4% -> 31.4%, 42.4% -> 32.5%.
+These are **offline estimates**, NOT new closed-loop flight validation.
+
+**Independent allocation transition.** After FDI confirms a motor, the
+controller's *blind estimated* `eta_pwm` used by the allocator ramps by at
+most `0.0045` each 2.5ms scheduler tick (180 percentage-points/sec). A new
+post-allocator guard also clips each pre-injector normalized nominal PWM step
+to `0.8` units/tick (8us per 2.5ms), while updating the L1 predictor's
+achievable nominal wrench and `L1BA` diagnostic with the actual issued PWM.
+The guard is active only in bounded HIL during a confirmed fault. A 150ms
+post-confirmation measured-estimate settling gate avoids adapting FDI severity
+through the transition based on delayed residuals. These are design-rate
+starting points, not tuned actuator dynamics.
+
+**New log `L1TR`:**
+`motor,est,alloc,step,conf,sat`.
+- `est`: blind FDI estimated PWM loss percentage
+- `alloc`: loss percentage actually assumed by the ramping allocator
+- `step`: largest issued nominal PWM step this tick (normalized 0..100)
+- `conf`: heuristic FDI fit score
+- `sat`: post-slew wrench error/saturation flag
+
+The deliberately **unmodified** injected percentage is still logged only as
+experimental truth in `L1DG`, never fed to estimator, allocator, yaw command
+or gain scheduler. Any closed-loop performance or new false positives must
+still be verified on fresh independent no-prop SITL/HIL data, including
+highly varying nominal commands, release, saturation and sensor latency.
+
+**Important risk:** limiting PWM slew can temporarily make the requested
+wrench infeasible even if a static solution exists. `L1BA` is recomputed
+after that cap to expose this discrepancy. Slower allocator correction might
+also increase the initial loss-of-control transient. The patch reduces
+instantaneous discontinuity; it does NOT guarantee safe recovery.
+
 ## Required validation before any powered experiment
 
 1. Run `python3 -m unittest discover -s tests -p 'test_mode29_pwm_ratio_hil.py' -v`.
