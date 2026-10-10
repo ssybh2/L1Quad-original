@@ -702,6 +702,8 @@ void ModeAdaptive::clear_auto_motor_fault()
     motor_pwm_no_fit_ticks = 0U;
     motor_pwm_candidate_loss_pct = 0.0f;
     motor_pwm_fdi_confidence = 0.0f;
+    motor_pwm_fdi_loss_lo_pct = 0.0f;
+    motor_pwm_fdi_loss_hi_pct = 100.0f;
     for (uint8_t i=0U;i<4U;i++) {
         for (uint8_t k=0U;k<MOTOR_PWM_FDI_GRID;k++) {
             motor_pwm_hypothesis_lp[i][k] = Vector3f{0.0f,0.0f,0.0f};
@@ -1337,6 +1339,24 @@ void ModeAdaptive::update_auto_motor_fault_detector(float time_in_this_run)
             if (i!=best) { next_fit=MIN(next_fit,by_motor_fit[i]); }
         }
         const float gap=next_fit-by_motor_fit[best];
+        // A dead-zone plateau can make e.g. 90% and 100% loss physically
+        // indistinguishable. Report all nearly equal-fit severities instead
+        // of pretending the grid-search minimizer is uniquely determined.
+        float loss_lo=100.0f;
+        float loss_hi=0.0f;
+        for (uint8_t k=0U;k<MOTOR_PWM_FDI_GRID;k++) {
+            const float ratio=
+                (obs-motor_pwm_hypothesis_lp[best][k]).length()/
+                MAX(obs_norm,ONSET_TOTAL_NM);
+            if (ratio<=by_motor_fit[best]+0.025f) {
+                const float pct=100.0f*float(k)/
+                    float(MOTOR_PWM_FDI_GRID-1U);
+                loss_lo=MIN(loss_lo,pct);
+                loss_hi=MAX(loss_hi,pct);
+            }
+        }
+        motor_pwm_fdi_loss_lo_pct=loss_lo;
+        motor_pwm_fdi_loss_hi_pct=loss_hi;
         const bool observation_valid=obs_rp>=ONSET_RP_NM &&
             obs_norm>=ONSET_TOTAL_NM && best_w[best]>=18.0f &&
             by_motor_loss[best]>=10.0f;
@@ -1346,7 +1366,9 @@ void ModeAdaptive::update_auto_motor_fault_detector(float time_in_this_run)
         motor_fdi_excitation_w=best_w[best];
         motor_pwm_fdi_confidence=constrain_float(
             (1.0f-by_motor_fit[best]/FIT_MAX) *
-            MIN(1.0f,gap/0.20f),0.0f,1.0f);
+            MIN(1.0f,gap/0.20f) *
+            (1.0f-MIN(0.75f,(loss_hi-loss_lo)/40.0f)),
+            0.0f,1.0f);
         if (!motor_fault_confirmed) {
             if (!model_fit) {
                 motor_fault_candidate_id=0U;
@@ -1409,6 +1431,7 @@ void ModeAdaptive::update_auto_motor_fault_detector(float time_in_this_run)
         motor_fdi_excitation_w=best_w[idx];
         if (best_w[idx]<18.0f ||
             by_motor_fit[idx]>0.42f ||
+            (loss_hi-loss_lo)>15.0f ||
             obs_norm<ONSET_TOTAL_NM) {
             motor_fdi_gate_code=9U;
             motor_bounded_fdi_freeze_samples++;
@@ -2561,8 +2584,8 @@ void ModeAdaptive::run()
 
     // Independent blind estimate. L1DG's injected values are for offline
     // validation only and are never read by estimator or allocator.
-    AP::logger().Write("L1PW", "id,pct,fit,conf,w,gate,sat",
-                       "BffffBB",
+    AP::logger().Write("L1PW", "id,pct,fit,conf,w,lo,hi,gate,sat",
+                       "BffffffBB",
                        (uint8_t)motor_fault_detected_id,
                        (double)motor_fault_loss_estimate_pct,
                        (double)motor_fault_residual_ratio,
@@ -2570,6 +2593,8 @@ void ModeAdaptive::run()
                        (double)(motor_fault_detected_id>=1U &&
                                 motor_fault_detected_id<=4U ?
                                 motor_fault_nominal_prev[motor_fault_detected_id-1U] : 0.0f),
+                       (double)motor_pwm_fdi_loss_lo_pct,
+                       (double)motor_pwm_fdi_loss_hi_pct,
                        (uint8_t)motor_fdi_gate_code,
                        (uint8_t)motor_bounded_primary_saturated);
 
