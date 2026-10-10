@@ -1287,10 +1287,32 @@ void ModeAdaptive::update_auto_motor_fault_detector(float time_in_this_run)
             }
             motor_pwm_fdi_started=true;
             motor_pwm_no_fit_ticks=0U;
+            // Run76 replay: threshold crossing occurs ~47ms AFTER the
+            // filtered residual started rising. Initialising every predicted
+            // response at zero creates an artificial delay and makes 30%
+            // PWM loss look like ~42% at confirmation. Bootstrap EACH
+            // candidate from its own projection of the ALREADY OBSERVED
+            // innovation. No injector timing, motor ID or loss is read.
+            constexpr float onset_roll[4]  = {+0.14f,-0.14f,-0.14f,+0.14f};
+            constexpr float onset_pitch[4] = {-0.14f,+0.14f,-0.14f,+0.14f};
+            constexpr float onset_yaw[4]   = {-1.0f,-1.0f,+1.0f,+1.0f};
             for (uint8_t i=0U;i<4U;i++) {
+                const float w=constrain_float(
+                    motor_fault_nominal_prev[i],0.0f,100.0f);
+                const float f_nom=softdrone_thrust_from_w(w);
+                const float m_nom=softdrone_moment_from_w(w);
                 for (uint8_t k=0U;k<MOTOR_PWM_FDI_GRID;k++) {
-                    motor_pwm_hypothesis_lp[i][k]=
-                        Vector3f{0.0f,0.0f,0.0f};
+                    const float loss=float(k)/float(MOTOR_PWM_FDI_GRID-1U);
+                    const float applied=(1.0f-loss)*w;
+                    const float df=f_nom-softdrone_thrust_from_w(applied);
+                    const float dm=m_nom-softdrone_moment_from_w(applied);
+                    const Vector3f h={
+                        onset_roll[i]*df,onset_pitch[i]*df,onset_yaw[i]*dm};
+                    const float h_norm_sq=h*h;
+                    const float initial_fraction=h_norm_sq>1.0e-8f ?
+                        constrain_float((obs*h)/h_norm_sq,0.0f,1.0f) :
+                        0.0f;
+                    motor_pwm_hypothesis_lp[i][k]=h*initial_fraction;
                 }
             }
         }
