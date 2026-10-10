@@ -283,7 +283,8 @@ class PwmRatioModelTests(unittest.TestCase):
                           "motor_bounded_injected_loss_pct",
                           "motor_bounded_recovery_active"):
             self.assertNotIn(forbidden,allocator)
-        self.assertIn("pwm_remaining[motor_fault_detected_id-1U]",allocator)
+        self.assertIn("motor_fault_detected_id==i+1U",allocator)
+        self.assertIn("motor_pwm_alloc_remaining[i]=pwm_remaining[i]",allocator)
         self.assertIn("M29_PAIR_EN=0",SRC)
 
     def test_bounded_model_uses_pwm_not_thrust_effectiveness(self):
