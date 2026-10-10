@@ -705,6 +705,12 @@ void ModeAdaptive::clear_auto_motor_fault()
     motor_pwm_fdi_loss_lo_pct = 0.0f;
     motor_pwm_fdi_loss_hi_pct = 100.0f;
     for (uint8_t i=0U;i<4U;i++) {
+        motor_pwm_alloc_remaining[i]=1.0f;
+    }
+    motor_pwm_last_nominal_valid=false;
+    motor_pwm_last_nominal_jump_w=0.0f;
+    mode29_zero(motor_pwm_last_nominal);
+    for (uint8_t i=0U;i<4U;i++) {
         for (uint8_t k=0U;k<MOTOR_PWM_FDI_GRID;k++) {
             motor_pwm_hypothesis_lp[i][k] = Vector3f{0.0f,0.0f,0.0f};
         }
@@ -2401,12 +2407,27 @@ void ModeAdaptive::run()
         // Strict firewall: use only independent blind FDI estimates.
         // The experiment injector's known motor, loss and release are NEVER
         // consulted when computing the controller's available authority.
-        float pwm_remaining[4]={1.0f,1.0f,1.0f,1.0f};
-        if (motor_fault_confirmed &&
-            motor_fault_detected_id>=1 && motor_fault_detected_id<=4) {
-            pwm_remaining[motor_fault_detected_id-1U]=
-                1.0f-0.01f*constrain_float(
+        // Avoid discontinuously changing the available PWM authority in
+        // a single 2.5ms tick at FDI confirmation. In Run76 the estimated
+        // effectiveness jumped from 1 to ~0.58, causing >200us command
+        // steps. Ramp the ALLOCATOR's blind estimate (not the plant fault).
+        // 180 percentage-points/second -> ~0.18s to reach 33% loss.
+        constexpr float PWM_AUTHORITY_SLEW_PER_TICK=0.0045f;
+        float pwm_remaining[4];
+        for (uint8_t i=0;i<4;i++) {
+            float desired_remaining=1.0f;
+            if (motor_fault_confirmed &&
+                motor_fault_detected_id==i+1U) {
+                desired_remaining=1.0f-0.01f*constrain_float(
                     motor_fault_loss_estimate_pct,0.0f,100.0f);
+            }
+            const float prev=motor_pwm_alloc_remaining[i];
+            const float delta=constrain_float(
+                desired_remaining-prev,
+                -PWM_AUTHORITY_SLEW_PER_TICK,
+                +PWM_AUTHORITY_SLEW_PER_TICK);
+            pwm_remaining[i]=constrain_float(prev+delta,0.0f,1.0f);
+            motor_pwm_alloc_remaining[i]=pwm_remaining[i];
         }
         Mode29BoundedDiag allocation;
         if (!mode29_bounded_allocate(requested, pwm_remaining,
