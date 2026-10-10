@@ -1461,6 +1461,17 @@ void ModeAdaptive::update_auto_motor_fault_detector(float time_in_this_run)
         }
         const uint8_t idx=confirmed-1U;
         motor_fdi_excitation_w=best_w[idx];
+        // Freeze severity correction while the allocation model transitions.
+        // This avoids chasing the old Run76 command jump with delayed
+        // observer residuals, independently of plant-side injection timing.
+        constexpr uint32_t ALLOCATION_SETTLE_MS=150U;
+        if (motor_fdi_confirmed_at_ms!=0U &&
+            (AP_HAL::millis()-motor_fdi_confirmed_at_ms) <
+            ALLOCATION_SETTLE_MS) {
+            motor_fdi_gate_code=11U; // blind authority transition
+            motor_bounded_fdi_freeze_samples++;
+            return;
+        }
         if (best_w[idx]<18.0f ||
             by_motor_fit[idx]>0.42f ||
             (loss_hi-loss_lo)>15.0f ||
