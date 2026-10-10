@@ -110,6 +110,86 @@ class PwmRatioModelTests(unittest.TestCase):
         b=missing_signature(0,42.,1.)
         self.assertEqual(a,b)
 
+    def test_late_threshold_start_bootstraps_observed_filter(self):
+        # A fault starts before the measured (LP-filtered) moment exceeds
+        # the FDI onset threshold. The old estimator resets predicted LP
+        # candidates to ZERO at threshold crossing, hence overestimates
+        # PWM loss to catch up to a partially-risen observation.
+        w=40.
+        candidates=[missing_signature(0,w,k/20.) for k in range(21)]
+        true=candidates[6]  # 30% PWM loss
+        obs=[0.,0.,0.]
+        started=False
+        old=[[0.,0.,0.] for _ in candidates]
+        boot=[[0.,0.,0.] for _ in candidates]
+        old_best=None
+        boot_best=None
+        ticks=0
+        for t in range(100):
+            obs=[.95*y+.05*x for y,x in zip(obs,true)]
+            if not started:
+                if norm3(obs[:2])<.08 or norm3(obs)<.10:
+                    continue
+                started=True
+                for k,h in enumerate(candidates):
+                    projection=sum(a*b for a,b in zip(obs,h))
+                    energy=sum(a*a for a in h)
+                    frac=min(1.,max(0.,projection/energy)) if energy>1e-8 else 0.
+                    boot[k]=[frac*x for x in h]
+            for k,h in enumerate(candidates):
+                old[k]=[.95*a+.05*b for a,b in zip(old[k],h)]
+                boot[k]=[.95*a+.05*b for a,b in zip(boot[k],h)]
+            ticks+=1
+            if ticks==24:
+                old_best=min(range(21),key=lambda k:
+                    norm3([a-b for a,b in zip(obs,old[k])]))
+                boot_best=min(range(21),key=lambda k:
+                    norm3([a-b for a,b in zip(obs,boot[k])]))
+                break
+        self.assertTrue(started)
+        self.assertIsNotNone(boot_best)
+        self.assertLess(abs(boot_best-6),abs(old_best-6))
+
+    def test_staged_authority_and_pwm_step_guards(self):
+        # 400-Hz rate limits used in firmware. Even when FDI suddenly
+        # reports 42%, allocation model cannot jump from 1.0 to 0.58.
+        authority=1.0
+        target=.58
+        seen=[]
+        for _ in range(100):
+            authority+=min(.0045,max(-.0045,target-authority))
+            seen.append(authority)
+        self.assertAlmostEqual(seen[0],.9955)
+        self.assertGreater(seen[0],.99)
+        self.assertAlmostEqual(seen[-1],target)
+        for x,y in zip(seen,seen[1:]):
+            self.assertLessEqual(abs(x-y),.00450001)
+        # 200-us legacy Run76 M1 jump becomes <=8us per 400-Hz tick.
+        old_w,new_w=49.5,78.7
+        limited=old_w+min(.8,max(-.8,new_w-old_w))
+        self.assertLessEqual((limited-old_w)*10.,8.000001)
+
+    def test_source_fdi_onset_uses_measured_only(self):
+        start=SRC.index("Run76 replay: threshold crossing")
+        end=SRC.index("// Every hypothesis predicts the MISSING",start)
+        boot=SRC[start:end]
+        self.assertIn("motor_pwm_hypothesis_lp[i][k]=h*initial_fraction",boot)
+        self.assertIn("obs*h",boot)
+        for forbidden in ("motor_degradation_motor_id",
+                          "motor_degradation_loss_pct",
+                          "motor_bounded_injected_loss_pct",
+                          "motor_bounded_injected_motor_id"):
+            self.assertNotIn(forbidden,boot)
+
+    def test_source_allocator_has_slew_and_post_slew_prediction(self):
+        self.assertIn("PWM_AUTHORITY_SLEW_PER_TICK=0.0045f",SRC)
+        self.assertIn("PWM_MAX_NOMINAL_STEP_W=0.8f",SRC)
+        self.assertIn("motor_pwm_last_nominal=motorPWMCommanded",SRC)
+        self.assertIn("motor_bounded_predicted_collective_n=achieved_f",SRC)
+        self.assertIn("ALLOCATION_SETTLE_MS=150U",SRC)
+        self.assertIn('AP::logger().Write("L1TR"',SRC)
+        self.assertIn("motor_pwm_alloc_remaining[4]",STATE)
+
     def test_no_fault_produces_zero_fault_signature(self):
         for i,w in enumerate((35.,40.,50.,60.)):
             self.assertAlmostEqual(norm3(missing_signature(i,w,0.)),0.)
