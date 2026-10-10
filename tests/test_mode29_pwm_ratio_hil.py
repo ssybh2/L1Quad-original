@@ -114,6 +114,72 @@ class PwmRatioModelTests(unittest.TestCase):
         for i,w in enumerate((35.,40.,50.,60.)):
             self.assertAlmostEqual(norm3(missing_signature(i,w,0.)),0.)
 
+    def test_causal_hypothesis_filters_recover_motor_and_severity(self):
+        # Offline idealized 400-Hz observer response, not actual airborne
+        # validation. Onset is identified from residual, not injection time.
+        commands=(40.,40.,40.,40.)
+        for failed in range(4):
+            for injected_loss in (.3,.5,.8):
+                observed=[0.,0.,0.]
+                hypotheses=[[[0.,0.,0.] for _ in range(21)]
+                            for _ in range(4)]
+                started=False
+                confirmed_id=None
+                candidate=None
+                count=0
+                value=0.
+                for tick in range(250):
+                    # Truth belongs only to independent plant in this test.
+                    plant=(missing_signature(failed,40.,injected_loss)
+                           if tick>=20 else (0.,0.,0.))
+                    observed=[.95*a+.05*b
+                              for a,b in zip(observed,plant)]
+                    magnitude=norm3(observed)
+                    planar=norm3(observed[:2])
+                    if not started:
+                        if planar<.08 or magnitude<.10:
+                            continue
+                        started=True
+                    fitness=[1000.]*4
+                    best_loss=[0.]*4
+                    for motor in range(4):
+                        for k in range(21):
+                            h=missing_signature(motor,40.,k/20.)
+                            old=hypotheses[motor][k]
+                            new=[.95*a+.05*b for a,b in zip(old,h)]
+                            hypotheses[motor][k]=new
+                            ratio=norm3([a-b for a,b in zip(observed,new)])
+                            ratio/=max(magnitude,.1)
+                            if ratio<fitness[motor]:
+                                fitness[motor]=ratio
+                                best_loss[motor]=5.*k
+                    idx=min(range(4),key=lambda i:fitness[i])
+                    competitor=min(fitness[i] for i in range(4)
+                                   if i!=idx)
+                    plausible=(magnitude>=.1 and planar>=.08
+                               and fitness[idx]<.36
+                               and competitor-fitness[idx]>.06
+                               and best_loss[idx]>=10.)
+                    if confirmed_id is None:
+                        if not plausible:
+                            candidate=None
+                            count=0
+                            continue
+                        if candidate!=idx or abs(value-best_loss[idx])>20.:
+                            candidate=idx
+                            value=best_loss[idx]
+                            count=1
+                        else:
+                            value+=.1*(best_loss[idx]-value)
+                            count+=1
+                        if count>=24:
+                            confirmed_id=idx
+                    elif fitness[confirmed_id]<.42:
+                        target_loss=best_loss[confirmed_id]
+                        value+=max(-.25,min(.25,.05*(target_loss-value)))
+                self.assertEqual(confirmed_id,failed)
+                self.assertAlmostEqual(value,100.*injected_loss,delta=5.)
+
     def test_source_contract_fdi_has_no_injection_truth(self):
         self.assertIn("MOTOR_PWM_FDI_GRID = 21U", STATE)
         start=SRC.index("EXPERIMENTAL BLIND PWM-RATIO FDI")
