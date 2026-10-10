@@ -2068,6 +2068,13 @@ private:
     float motor_pwm_fdi_loss_lo_pct = 0.0f;
     float motor_pwm_fdi_loss_hi_pct = 100.0f;
 
+    // Independent HIL control allocator transition state. Deliberately
+    // distinct from measured FDI severity and plant-side injected truth.
+    float motor_pwm_alloc_remaining[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+    VectorN<float, 4> motor_pwm_last_nominal;
+    bool motor_pwm_last_nominal_valid = false;
+    float motor_pwm_last_nominal_jump_w = 0.0f;
+
     // HIL-only estimator diagnostics and observer-delay anti-windup.
     // Kept separate from legacy FDI when M29_BALLOC=0.
     uint32_t motor_fdi_confirmed_at_ms = 0U;
