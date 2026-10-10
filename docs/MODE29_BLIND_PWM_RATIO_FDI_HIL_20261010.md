@@ -50,7 +50,7 @@ In `update_auto_motor_fault_detector()` with `M29_BALLOC=1`, scan four candidate
 Each hypothesis is **low-pass filtered** with alpha=0.05 (400Hz ~49ms) to match the logged L1 moment innovation filter.
 A thresholded onset starts the independent hypothesis states; motor ID requires a good residual fit, separation from other IDs, and 24 consistent samples (~60ms of persistence after a plausible fit, **not a promise of 60ms detection**). Fault severity is retained and updated continuously after confirmation when excitation and fit permit.
 
-Important limitations: the hypothesis filter does not model complete ESC/rotor lag or nonlinear aerodynamic changes, and starts at a detected onset rather than the true onset. Static thrust/torque fits were originally calibrated for a specific 6S motor/prop/ESC setup, partially extrapolated above normalized `w=80`. Noise, gyro drift, saturation, externally induced torques and delay mismatch can create bias. The `L1PW.conf` value is a **heuristic fit score, not a statistically calibrated probability**. No motor-specific force, RPM, or actual aircraft thrust is directly measured.
+Important limitations: the hypothesis filter does not model complete ESC/rotor lag or nonlinear aerodynamic changes, and starts at a detected onset rather than the true onset. Static thrust/torque fits were originally calibrated for a specific 6S motor/prop/ESC setup, partially extrapolated above normalized `w=80`. Noise, gyro drift, saturation, externally induced torques and delay mismatch can create bias. The `L1PW.conf` value is a **heuristic fit score, not a statistically calibrated probability**. `L1PW.lo/hi` report approximate equal-fit PWM-loss bounds, not a calibrated confidence interval. At low PWM, 90% and 100% loss can both fall below the motor dead zone and become physically indistinguishable. The allocator currently uses the point estimate, so its assumed authority can still be too optimistic. No motor-specific force, RPM, or actual thrust is directly measured.
 
 ## Fault-tolerant allocation
 
@@ -75,7 +75,7 @@ Control allocation uses `l_hat` only *after motor ID confirmation*; before then 
 - `L1DG.a1..a4`: command after plant-side fault injection (not ESC RPM or physical thrust).
 - `L1FD`: FDI candidate/confirmed state, ID, estimated *PWM loss percent*, L1 residual fit, estimated roll/pitch/yaw disturbance.
 - `L1FI`: gating and per-tick severity innovation (experimental).
-- `L1PW`: `id,pct,fit,conf,w,gate,sat`. Only independent FDI estimates.
+- `L1PW`: `id,pct,fit,conf,w,lo,hi,gate,sat`. `lo/hi` are equal-fit PWM-loss ambiguity bounds, not statistical confidence intervals.
 - `L1BA`: allocator saturation, requested/predicted thrust and RP errors.
 - `L1PR`: pairing experimental logging (pair disabled in this mode).
 - `L1GS`: effective baseline gain mode for HIL.
