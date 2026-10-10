@@ -1,0 +1,69 @@
+name: Build Mode29 blind PWM-ratio HIL Pixhawk6C
+
+on:
+  push:
+    branches:
+      - feature/mode29-blind-pwm-ratio-fdi-hil-20261010
+  workflow_dispatch:
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 65
+    steps:
+      - name: Checkout exact experiment branch
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Verify source-level information firewall and nonlinear PWM math
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tests -p 'test_mode29_pwm_ratio_hil.py' -v
+          grep -q 'GSCALAR(m29_balloc_en, "M29_BALLOC", 0)' L1AC_customization/ArduCopter/Parameters.cpp
+          grep -q 'Mode29 PWM-ratio HIL requires M29_PAIR_EN=0' L1AC_customization/ArduCopter/mode_adaptive.cpp
+          grep -q 'MOTOR_PWM_FDI_GRID = 21U' L1AC_customization/ArduCopter/mode.h
+
+      - name: Install ArduPilot toolchain and source customization
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x installation.sh
+          ./installation.sh
+
+      - name: Compile for Pixhawk6C (not flight qualified)
+        shell: bash
+        run: |
+          set -euo pipefail
+          . ~/.profile
+          cd ardupilot
+          ./waf configure --board Pixhawk6C
+          ./waf copter -j2
+
+      - name: Archive exact source revision and HIL-only firmware
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p firmware-pwm-ratio-hil
+          cp ardupilot/build/Pixhawk6C/bin/arducopter.apj firmware-pwm-ratio-hil/
+          cp ardupilot/build/Pixhawk6C/bin/arducopter.bin firmware-pwm-ratio-hil/
+          {
+            echo "branch=${GITHUB_REF_NAME}"
+            echo "git_commit=${GITHUB_SHA}"
+            echo "base_commit=f3f12d901e82c779cd842246556091ba21492838"
+            echo "M29_BALLOC=1 PWM ratio injection: w_applied=(1-loss)*w_nominal"
+            echo "Blind 4-motor FDI uses only L1/IMU and pre-injector commands"
+            echo "M29_PAIR_EN=0 required; gain schedule forced to baseline in HIL"
+            echo "FDI severity updates are experimental, not validated"
+            echo "NOT CLEARED FOR PROPELLER-ON FLIGHT - SITL/HIL BENCH ONLY"
+          } > firmware-pwm-ratio-hil/BUILD_INFO.txt
+          ls -lh firmware-pwm-ratio-hil/
+
+      - name: Upload HIL-only experimental firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: mode29-blind-pwm-ratio-fdi-hil-only-pixhawk6c-firmware
+          path: firmware-pwm-ratio-hil/
+          if-no-files-found: error
