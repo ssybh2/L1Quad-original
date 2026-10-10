@@ -1342,13 +1342,17 @@ void ModeAdaptive::update_auto_motor_fault_detector(float time_in_this_run)
         // A dead-zone plateau can make e.g. 90% and 100% loss physically
         // indistinguishable. Report all nearly equal-fit severities instead
         // of pretending the grid-search minimizer is uniquely determined.
+        const uint8_t interval_motor=
+            (motor_fault_confirmed && motor_fault_detected_id>=1U &&
+             motor_fault_detected_id<=4U) ?
+            motor_fault_detected_id-1U : best;
         float loss_lo=100.0f;
         float loss_hi=0.0f;
         for (uint8_t k=0U;k<MOTOR_PWM_FDI_GRID;k++) {
             const float ratio=
-                (obs-motor_pwm_hypothesis_lp[best][k]).length()/
+                (obs-motor_pwm_hypothesis_lp[interval_motor][k]).length()/
                 MAX(obs_norm,ONSET_TOTAL_NM);
-            if (ratio<=by_motor_fit[best]+0.025f) {
+            if (ratio<=by_motor_fit[interval_motor]+0.025f) {
                 const float pct=100.0f*float(k)/
                     float(MOTOR_PWM_FDI_GRID-1U);
                 loss_lo=MIN(loss_lo,pct);
