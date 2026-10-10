@@ -2158,10 +2158,9 @@ void ModeAdaptive::run()
         motor_degradation_loss_pct > 0.0f &&
         motor_degradation_command_fresh(motor_deg_now_ms);
 
-    // HIL-only synchronized release of the intentionally injected
-    // effectiveness impairment. Do not transfer this "known injection"
-    // handover to a spontaneous real motor recovery: in that case the
-    // actual actuator effectiveness is not independently measured.
+    // Plant-side controlled PWM-loss release is strictly separate from
+    // the blind observer and from the fault-tolerant control allocation.
+    // No known injection event or loss is sent into FDI/controller.
     if (motor_bounded_enabled_this_run) {
         if (motor_degradation_active) {
             motor_bounded_injected_motor_id=motor_degradation_motor_id;
@@ -2192,7 +2191,8 @@ void ModeAdaptive::run()
     AP::logger().Write("L1GS",
                        "mode,raw,sched,conf,kpx,kpy,kpz,kvx,kvy,kvz",
                        "Bfffffffff",
-                       (uint8_t)constrain_int16((int16_t)g.m29_gs_mode, 0, 2),
+                       (uint8_t)(motor_bounded_enabled_this_run ? 0 :
+                           constrain_int16((int16_t)g.m29_gs_mode, 0, 2)),
                        (double)gain_schedule_loss_raw_pct,
                        (double)gain_schedule_loss_sched_pct,
                        (double)gain_schedule_confidence,
@@ -2346,8 +2346,7 @@ void ModeAdaptive::run()
         // No fixed-heading catch-up at high spin. Desired yaw is physical
         // braking torque, clipped to the *remaining* nullspace below.
         // Rate damping persists through the entire fault recovery.
-        if (motor_fault_confirmed || motor_bounded_recovery_active ||
-            motor_pair_active || motor_fault_yaw_free_latched) {
+        if (motor_fault_confirmed || motor_fault_yaw_free_latched) {
             requested[3]=constrain_float(-0.045f*omega.z,-0.15f,0.15f);
         }
         // Strict firewall: use only independent blind FDI estimates.
