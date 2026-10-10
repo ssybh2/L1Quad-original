@@ -175,7 +175,7 @@ bool mode29_primary_interval(const VectorN<float, 4> &cmd,
     lo=-1.0e6f; hi=1.0e6f;
     for (uint8_t i=0;i<4;i++) {
         const float a=-base[i]/signs[i];
-        const float b=(eta[i]*max_f-base[i])/signs[i];
+        const float b=(softdrone_thrust_from_w(100.0f*eta[i])-base[i])/signs[i];
         lo=MAX(lo,MIN(a,b)); hi=MIN(hi,MAX(a,b));
     }
     return lo<=hi+1.0e-5f;
