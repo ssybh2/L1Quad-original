@@ -13,7 +13,6 @@
 #include <AP_HAL/AP_HAL.h>
 #include <AP_Motors/AP_Motors_Class.h> // for sending motor speed
 #include <AP_ESC_Telem/AP_ESC_Telem.h>  // Read-only ESC RPM telemetry; never feeds L1/FDI or motor allocation
-#include <AP_ESC_Telem/AP_ESC_Telem.h>  // Read-only ESC RPM telemetry; never feeds L1/FDI or motor allocation
 #include "ACRL_trajectories.h"         // small libraries for trajectories at ACRL
 
 #if MODE_ADAPTIVE_ENABLED == ENABLED
@@ -2415,37 +2414,6 @@ void ModeAdaptive::run()
                        (double)motorPWM[1],
                        (double)motorPWM[2],
                        (double)motorPWM[3]);
-    // Read-only, low-rate RPM diagnostics for the Pixhawk6C-bdshot bench build.
-    // ArduPilot's IOMCU offsets AUX1..AUX4 to ESC indices 0..3.
-    // R1..R4 are *physical FMU PWM OUT 1..4*, not Motor1..Motor4.
-    // A failed/stale RPM read is recorded as -1 and its Val bit is cleared.
-    // Nothing here changes the fault injector, L1 or motor allocation.
-#if HAL_WITH_ESC_TELEM
-    {
-        static uint32_t last_rpm_log_ms = 0U;
-        const uint32_t rpm_log_now_ms = AP_HAL::millis();
-        if (rpm_log_now_ms - last_rpm_log_ms >= 50U) {
-            last_rpm_log_ms = rpm_log_now_ms;
-            float fmu_rpm[4] = {-1.0f, -1.0f, -1.0f, -1.0f};
-            uint8_t valid_mask = 0U;
-            for (uint8_t aux = 0U; aux < 4U; aux++) {
-                float raw_rpm = 0.0f;
-                if (AP::esc_telem().get_raw_rpm(aux, raw_rpm) &&
-                    isfinite(raw_rpm) && raw_rpm >= 0.0f) {
-                    fmu_rpm[aux] = raw_rpm;
-                    valid_mask |= uint8_t(1U << aux);
-                }
-            }
-            AP::logger().Write("L1RP", "Ms,R1,R2,R3,R4,Val", "IffffB",
-                               rpm_log_now_ms,
-                               (double)fmu_rpm[0],
-                               (double)fmu_rpm[1],
-                               (double)fmu_rpm[2],
-                               (double)fmu_rpm[3],
-                               valid_mask);
-        }
-    }
-#endif
     // Read-only, low-rate RPM diagnostics for the Pixhawk6C-bdshot bench build.
     // ArduPilot's IOMCU offsets AUX1..AUX4 to ESC indices 0..3.
     // R1..R4 are *physical FMU PWM OUT 1..4*, not Motor1..Motor4.
