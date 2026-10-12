@@ -1,0 +1,71 @@
+name: Build Mode29 APM80 exact-source bidirectional DShot RPM BENCH firmware
+
+on:
+  push:
+    branches:
+      - feature/mode29-apm80-recover-bdshot-rpm-20261012
+  workflow_dispatch:
+
+jobs:
+  pixhawk6c-bdshot-rpm:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 70
+    steps:
+      - name: Checkout original source and ArduPilot submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Test inherited anti-windup and read-only RPM source contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/test_mode29_pair_math.py
+          python3 tools/test_mode29_bounded_hil_contract.py
+          python3 -m unittest discover -s tests -p 'test_fdi_hil_antiwindup.py' -v
+          python3 tools/test_mode29_apm80_rpm_contract.py
+
+      - name: Install firmware dependencies and apply original Mode29 customizations
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x installation.sh
+          ./installation.sh
+
+      - name: Compile Pixhawk6C Mini bidirectional DShot
+        shell: bash
+        run: |
+          set -euo pipefail
+          . ~/.profile
+          cd ardupilot
+          ./waf configure --board Pixhawk6C-bdshot
+          ./waf copter -j2
+
+      - name: Pack experimental firmware with exact source provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p firmware-apm80-rpm-bench
+          cp ardupilot/build/Pixhawk6C-bdshot/bin/arducopter.apj firmware-apm80-rpm-bench/
+          cp ardupilot/build/Pixhawk6C-bdshot/bin/arducopter.bin firmware-apm80-rpm-bench/
+          {
+            echo "release=80% APM recover the nomianl cmd"
+            echo "base_branch=feature/mode29-fdi-antiwindup-hil-20261008"
+            echo "base_commit=f3f12d901e82c779cd842246556091ba21492838"
+            echo "base_source_verified_via_original_RELEASE_BUILD_INFO.txt=true"
+            echo "new_branch=${GITHUB_REF_NAME}"
+            echo "new_git_commit=${GITHUB_SHA}"
+            echo "board=Pixhawk6C-bdshot"
+            echo "antiwindup=125ms settle, strict gates, +30 percentage-points/s rise"
+            echo "L1RP=20Hz FMU AUX 1-4 read-only RPM"
+            echo "NOT FLIGHT QUALIFIED, PROPELLERS REMOVED / UNPOWERED HIL ONLY"
+          } > firmware-apm80-rpm-bench/BUILD_INFO.txt
+          ls -lh firmware-apm80-rpm-bench/
+
+      - name: Upload APM80 exact-base BENCH-only firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: mode29-APM80-exactbase-bdshot-rpm-BENCH-ONLY
+          path: firmware-apm80-rpm-bench/
+          if-no-files-found: error
