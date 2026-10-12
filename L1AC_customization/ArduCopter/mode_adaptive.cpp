@@ -23,12 +23,18 @@ constexpr float MODE29_ENTRY_MAX_XY_M = 0.50f;
 constexpr float MODE29_ENTRY_MAX_Z_M = 0.50f;
 
 #if REAL_OR_SITL
-// Softdrone single-motor 6S static model refit from the two valid 2026-10-03
-// staircase datasets (1405 motor, 3-inch prop, 30 A ESC, 50 Hz PWM).
+// Softdrone two-sweep 2026-10-03 6S static model, 50 Hz PWM TESTED.
+// Source: soft(3).zip (34 staircase measurements).
+// Test file motor/prop/ESC names are unreliable; use verified physical setup.
+// Measured battery: 21.95..24.69 V (mean 23.77 V); NOT 4S or DShot measured.
 //
-// Measured pack voltage across the fitted sweeps: 21.95..24.69 V
-// (mean 23.77 V). Command variable:
-//     w = (PWM_us - 1000) / 10
+// Preserve original PWM fit and physical coefficients EXACTLY.
+// Mode29 virtual PWM: 1000+10*w. When MOT_PWM_TYPE=5, ArduPilot 4.4's
+// non-3D DShot path translates it into DShot throttle D=48+20*w (w>0);
+// w==0 maps to D=0. The DShot equivalent below is JUST a coordinate
+// transform: the actual ESC DShot->RPM/thrust response remains UNKNOWN.
+// Data only tests w<=80 (D<=1648). Above that is extrapolation, NOT
+// qualified for flight/fault-injection, and 4S needs new characterization.
 //
 // The dead-zone cubic preserves F(0)=M(0)=0 and remains monotonic throughout
 // Mode29's 0..100 command range. The thrust fit retains the near-zero samples
@@ -106,6 +112,58 @@ float softdrone_moment_slope_from_w(float w)
                                 SOFTDRONE_M_C3,
                                 SOFTDRONE_M_C2,
                                 SOFTDRONE_M_C1);
+}
+
+// DShot digital command-domain representation of the SAME 6S PWM fit.
+// Not a physical DShot calibration! It is not allowed to modify the
+// control allocation or fault detector on the strength of this proxy.
+constexpr float SOFTDRONE_DSHOT_F_DEAD = 137.5406380f;
+constexpr float SOFTDRONE_DSHOT_F_C3   = -3.2835394875e-09f;
+constexpr float SOFTDRONE_DSHOT_F_C2   =  1.0042009750e-05f;
+constexpr float SOFTDRONE_DSHOT_F_C1   =  2.0287837900e-09f;
+constexpr float SOFTDRONE_DSHOT_M_DEAD = 172.9452432f;
+constexpr float SOFTDRONE_DSHOT_M_C3   = -3.1326050125e-11f;
+constexpr float SOFTDRONE_DSHOT_M_C2   =  9.6052075750e-08f;
+constexpr float SOFTDRONE_DSHOT_M_C1   =  2.7140452750e-05f;
+constexpr uint16_t SOFTDRONE_DSHOT_MAX_BENCH_CMD = 1648U;
+
+// Mirrors the physical non-3D DShot channel conversion in RCOutput.cpp:
+// normalized w -> uint16_t virtual PWM -> DShot throttle. The value
+// represents the requested throttle BEFORE ESC motor dynamics, not RPM.
+uint16_t softdrone_dshot_proxy_command_from_w(float w)
+{
+    if (!isfinite(w) || w <= 0.0f) {
+        return 0U;
+    }
+    const uint16_t virtual_pwm = (uint16_t)constrain_float(
+        1000.0f + 10.0f * w, 1000.0f, 2000.0f);
+    if (virtual_pwm <= 1000U) {
+        return 0U;
+    }
+    return MIN(uint16_t(2047U),
+               uint16_t(2U * (virtual_pwm - 1000U) + 48U));
+}
+
+float softdrone_thrust_from_dshot_proxy(uint16_t d)
+{
+    if (d <= 48U) {
+        return 0.0f;
+    }
+    const float x = MAX(0.0f, float(d) - SOFTDRONE_DSHOT_F_DEAD);
+    return MAX(0.0f, ((SOFTDRONE_DSHOT_F_C3 * x +
+                       SOFTDRONE_DSHOT_F_C2) * x +
+                       SOFTDRONE_DSHOT_F_C1) * x);
+}
+
+float softdrone_moment_from_dshot_proxy(uint16_t d)
+{
+    if (d <= 48U) {
+        return 0.0f;
+    }
+    const float x = MAX(0.0f, float(d) - SOFTDRONE_DSHOT_M_DEAD);
+    return MAX(0.0f, ((SOFTDRONE_DSHOT_M_C3 * x +
+                       SOFTDRONE_DSHOT_M_C2) * x +
+                       SOFTDRONE_DSHOT_M_C1) * x);
 }
 
 float softdrone_w_from_thrust(float thrust_n)
@@ -2442,6 +2500,35 @@ void ModeAdaptive::run()
                                (double)fmu_rpm[2],
                                (double)fmu_rpm[3],
                                valid_mask);
+#if REAL_OR_SITL
+            // Diagnostic model only. D1..D4 are logical motor order and
+            // pre-ESC nominal DShot throttle (not actual DShot wire packets).
+            // F1..F4 and T1..T4 are unverified 6S PWM-derived predictions.
+            // Ex marks motors whose command lies above tested DShot=1648.
+            uint16_t equiv_dshot[4] = {};
+            float equiv_force_n[4] = {};
+            float equiv_torque_nm[4] = {};
+            uint8_t extrapolated_mask = 0U;
+            for (uint8_t i = 0U; i < 4U; i++) {
+                const float w_sent = motorEnable ? motorPWM[i] : 0.0f;
+                equiv_dshot[i] = softdrone_dshot_proxy_command_from_w(w_sent);
+                equiv_force_n[i] = softdrone_thrust_from_dshot_proxy(equiv_dshot[i]);
+                equiv_torque_nm[i] = softdrone_moment_from_dshot_proxy(equiv_dshot[i]);
+                if (equiv_dshot[i] > SOFTDRONE_DSHOT_MAX_BENCH_CMD) {
+                    extrapolated_mask |= uint8_t(1U << i);
+                }
+            }
+            AP::logger().Write(
+                "L1DM", "Ms,D1,D2,D3,D4,F1,F2,F3,F4,T1,T2,T3,T4,Ex",
+                "IHHHHffffffffB",
+                rpm_log_now_ms,
+                equiv_dshot[0], equiv_dshot[1], equiv_dshot[2], equiv_dshot[3],
+                (double)equiv_force_n[0], (double)equiv_force_n[1],
+                (double)equiv_force_n[2], (double)equiv_force_n[3],
+                (double)equiv_torque_nm[0], (double)equiv_torque_nm[1],
+                (double)equiv_torque_nm[2], (double)equiv_torque_nm[3],
+                extrapolated_mask);
+#endif
         }
     }
 #endif
