@@ -1,0 +1,75 @@
+name: Build Mode29 APM80 DShot-equivalent 6S model HIL BENCH firmware
+
+on:
+  push:
+    branches:
+      - feature/mode29-apm80-dshot-equivalent-6s-20261012
+  workflow_dispatch:
+
+jobs:
+  pixhawk6c-bdshot-proxy:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 70
+    steps:
+      - name: Checkout exact APM80 recovery source and ArduPilot
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Verify APM80 fault logic and equivalent-model numerical consistency
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/test_mode29_pair_math.py
+          python3 tools/test_mode29_bounded_hil_contract.py
+          python3 -m unittest discover -s tests -p 'test_fdi_hil_antiwindup.py' -v
+          python3 tools/test_mode29_apm80_rpm_contract.py
+          python3 tools/test_mode29_dshot_6s_equivalence.py
+
+      - name: Install dependencies and apply original Mode29 source customizations
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x installation.sh
+          ./installation.sh
+
+      - name: Compile Pixhawk6C Mini bidirectional DShot
+        shell: bash
+        run: |
+          set -euo pipefail
+          . ~/.profile
+          cd ardupilot
+          ./waf configure --board Pixhawk6C-bdshot
+          ./waf copter -j2
+
+      - name: Package explicitly unverified DShot-equivalent BENCH firmware
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p firmware-apm80-dshot-proxy
+          cp ardupilot/build/Pixhawk6C-bdshot/bin/arducopter.apj firmware-apm80-dshot-proxy/
+          cp ardupilot/build/Pixhawk6C-bdshot/bin/arducopter.bin firmware-apm80-dshot-proxy/
+          {
+            echo "original_80pct_recovery_commit=f3f12d901e82c779cd842246556091ba21492838"
+            echo "parent_rpm_branch=feature/mode29-apm80-recover-bdshot-rpm-20261012"
+            echo "model_development_branch=${GITHUB_REF_NAME}"
+            echo "git_commit=${GITHUB_SHA}"
+            echo "board=Pixhawk6C-bdshot"
+            echo "model=6S_50Hz_PWM_data_transformed_to_DShot_command_coordinates_ONLY"
+            echo "measured_voltage=21.95..24.69_V_6S"
+            echo "measured_domain_DShot=0..1648"
+            echo "DShot_physical_thrust_measured=false"
+            echo "4S_validated=false"
+            echo "Mode29_L1_FDI_allocator_and_original_Fw_Mw_unchanged=true"
+            echo "logs=L1RP measured RPM; L1DM virtual DShot and model-predicted thrust/torque"
+            echo "NOT FLIGHT QUALIFIED: NO PROPELLERS / HIL ONLY"
+          } > firmware-apm80-dshot-proxy/BUILD_INFO.txt
+          ls -lh firmware-apm80-dshot-proxy/
+
+      - name: Upload experimental BENCH-only firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: mode29-apm80-6S-dshot-equivalent-unverified-BENCH-ONLY
+          path: firmware-apm80-dshot-proxy/
+          if-no-files-found: error
