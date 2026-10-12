@@ -16,7 +16,7 @@ assert "motor_bounded_recovery_active" in s
 assert "motors->rc_write(0," in s
 assert "motors->rc_write(3," in s
 assert "mode29_bounded_allocate" in s
-assert "M29_BALLOC" not in Path("docs/MODE29_DSHOT_6S_EQUIVALENT_20261012.md").read_text().split("runtime launch suggestion is NOT")[0] or True
+assert "NO PHYSICAL DSHOT THRUST DATA" in Path("docs/MODE29_DSHOT_6S_EQUIVALENT_20261012.md").read_text()
 # Check coefficients are a pure coordinate transformation of the original constants.
 fdead,fc3,fc2,fc1 = 4.47703190,-2.62683159e-05,4.01680390e-03,4.05756758e-08
 mdead,mc3,mc2,mc1 = 6.24726216,-2.50608401e-07,3.84208303e-05,5.42809055e-04
