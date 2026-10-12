@@ -1,0 +1,71 @@
+name: Build Mode29 pair-derived Pixhawk6C bidirectional DShot RPM BENCH firmware
+
+on:
+  push:
+    branches:
+      - feature/mode29-apm80-recover-bdshot-rpm-20261012
+  workflow_dispatch:
+
+jobs:
+  pixhawk6c-bdshot-rpm:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 70
+    steps:
+      - name: Checkout exact source and ArduPilot submodule
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Verify inherited fault controller and RPM-only changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/test_mode29_pair_math.py
+          python3 tools/test_mode29_bounded_hil_contract.py
+          python3 -m unittest discover -s tests -p 'test_fdi_hil_antiwindup.py' -v
+          python3 tools/test_mode29_pair_rpm_contract.py
+
+      - name: Install dependencies and custom Mode29 sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x installation.sh
+          ./installation.sh
+
+      - name: Compile Pixhawk 6C Mini bidirectional DShot variant
+        shell: bash
+        run: |
+          set -euo pipefail
+          . ~/.profile
+          cd ardupilot
+          ./waf configure --board Pixhawk6C-bdshot
+          ./waf copter -j2
+
+      - name: Package unvalidated BENCH firmware with provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p firmware-rpm-bench
+          cp ardupilot/build/Pixhawk6C-bdshot/bin/arducopter.apj firmware-rpm-bench/
+          cp ardupilot/build/Pixhawk6C-bdshot/bin/arducopter.bin firmware-rpm-bench/
+          {
+            echo "base_branch=feature/mode29-fdi-antiwindup-hil-20261008"
+            echo "base_commit=f3f12d901e82c779cd842246556091ba21492838"
+            echo "development_branch=${GITHUB_REF_NAME}"
+            echo "development_commit=${GITHUB_SHA}"
+            echo "board=Pixhawk6C-bdshot"
+            echo "release_reference=pair (80% APM recover the nomianl cmd)"
+            echo "release_asset_source_sha=f3f12d901e82c779cd842246556091ba21492838 (from user-provided release BUILD_INFO; tag points to unrelated main)"
+            echo "Inherited FDI: 125ms settling / strict signal gates / +30pp/s cap / L1FI logs" 
+            echo "L1RP=read-only FMU AUX1..AUX4 RPM, 20Hz, no FDI integration"
+            echo "NOT FLIGHT VALIDATED; PROPELLERS REMOVED / UNPOWERED HIL ONLY"
+          } > firmware-rpm-bench/BUILD_INFO.txt
+          ls -lh firmware-rpm-bench/
+
+      - name: Upload BENCH-only firmware binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: mode29-pair-derived-pixhawk6c-bdshot-rpm-BENCH-ONLY
+          path: firmware-rpm-bench/
+          if-no-files-found: error
